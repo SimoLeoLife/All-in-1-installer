@@ -43,7 +43,7 @@ public sealed class InstallerWindow : Window
     private ServerWizard[] Wizards => [_wizard, _atomWizard, _toolsWizard];
     private bool AnyBusy => Wizards.Any(w => w.IsBusy);
     // The wizard on screen; the header and footer show its connection.
-    private ServerWizard Current => _page switch { Page.AtomCms => _atomWizard, Page.Tools => _toolsWizard, _ => _wizard };
+    private ServerWizard Current => _page switch { Page.AtomCms => _atomWizard, Page.Tools or Page.ServerStatus => _toolsWizard, _ => _wizard };
 
     public InstallerWindow()
     {
@@ -68,6 +68,8 @@ public sealed class InstallerWindow : Window
         tools = new ToolsView(() => _toolsWizard.Connection, (busy, status) => _toolsWizard.SetExternalBusy(busy, status));
         _tools = tools;
         _toolsWizard.StateChanged += _tools.Refresh;
+        _tools.StatusRequested += ShowServerStatus;
+        _tools.BackRequested += ShowTools;
         foreach (ServerWizard wizard in Wizards)
         {
             wizard.StateChanged += () =>
@@ -254,7 +256,7 @@ public sealed class InstallerWindow : Window
         _pageScroll.Offset = default;
     }
 
-    private enum Page { Dashboard, Install, AtomCms, Tools, About }
+    private enum Page { Dashboard, Install, AtomCms, Tools, ServerStatus, About }
     private Page _page;
 
     private void RefreshHeader()
@@ -264,6 +266,7 @@ public sealed class InstallerWindow : Window
             Page.Install => ("Install New Server", "Log in to the Ubuntu / Debian server that will run the hotel."),
             Page.AtomCms => ("AtomCMS", "Addon: AtomCMS as the hotel's website, Octane on /client."),
             Page.Tools => ("Tools", "Restart services, back up and import the database, update, and move your settings."),
+            Page.ServerStatus => ("Server status", $"Live figures of {_toolsWizard.Connection?.Login.Host ?? "the server"}, every 2 seconds."),
             Page.About => ("About", "All-in-1 Installer"),
             _ => ("Dashboard", "Set up a complete hotel server over SSH.")
         };
@@ -324,6 +327,16 @@ public sealed class InstallerWindow : Window
         ActivateNavigation(_toolsNavigation);
         ShowScrollPage(_toolsWizard.View, _tools.Workspace, _tools.Settings);
         _toolsWizard.FocusCurrentStep();
+        RefreshHeader();
+        RefreshFooter();
+    }
+
+    // Only the dashboard; Back (or Tools in the sidebar) returns to the tiles.
+    private void ShowServerStatus()
+    {
+        _page = Page.ServerStatus;
+        ActivateNavigation(_toolsNavigation);
+        ShowScrollPage(_tools.StatusPage);
         RefreshHeader();
         RefreshFooter();
     }

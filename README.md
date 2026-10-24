@@ -8,6 +8,7 @@ machine over SSH:
 | Polaris Emulator (Java 25 game server + MariaDB) | <https://github.com/duckietm/Polaris-Emulator> |
 | Octane (browser client) | <https://github.com/duckietm/Octane> |
 | Octane Renderer | <https://github.com/duckietm/Octane-Renderer> |
+| AtomCMS (addon, optional) | <https://github.com/ObjectRetros/atomcms> |
 
 The GUI uses the same Avalonia "Professional" look as the
 [All-in-1 Converter](https://github.com/duckietm/all-in-1-converter): dark sidebar, cards,
@@ -579,7 +580,8 @@ Every install step first checks the server and shows what it found:
 | Emulator | JDK 25, the `emulator` account, a built JAR, `config.ini`, and the emulator running | **Skip (already installed)** · Rebuild and restart |
 | Web access | Docker from download.docker.com running, the Traefik container running, the hotel site on 127.0.0.1:85 | **Skip (already installed)** · Set up again |
 | Harden | ufw active with deny incoming and no 3306 rule, the TCP settings in `/etc/sysctl.conf`, `ws.whitelist` = the hotel's address and `ws.ip.header` = `X-Forwarded-For` | **Skip (already installed)** · Apply again |
-| Octane | `dist/` built, the site's root is `dist/`, `/var/www/gamedata` exists, `socket.url` matches the web access address and the camera URLs are set (ui-config and emulator) | **Skip (already installed)** · Configure and rebuild |
+| Octane | `dist/` built and served, `/var/www/gamedata` exists, `socket.url` matches the web access address, the camera URLs are set (ui-config and emulator) and `plainConfigBaseUrl` matches the layout (`/configuration/`, or `/client/configuration/` with AtomCMS) | **Skip (already installed)** · Configure and rebuild |
+| AtomCMS (addon) | `vendor/` and the atom theme are built, AtomCMS' tables exist, the hotel site's root is `/var/www/atomcms/public` and `hotel.env` has `CMS=atom` | **Skip (already installed)** · Update and rebuild |
 
 When a step is not done yet, the install button is the highlighted one and **Skip** is next to it
 (for example, to keep using the password instead of a key). Skipping changes nothing on the server.
@@ -589,8 +591,114 @@ Skipping a step moves on to the next one, and a failed step can be skipped too.
 
 ![NGINX already installed](docs/screenshots/rerun-nginx-installed.png)
 
-**Next steps:** none planned; every default step is in place. A new step is a
-class derived from `InstallStep`, added to the `_installSteps` list in `NewServerWizard`.
+A new step is a class derived from `InstallStep`, added to `ServerWizard.ServerSteps()`. An addon is a
+`ServerWizard` with its own step list and finish page (and `keyLogin: true`), plus a sidebar entry in `InstallerWindow`.
+
+## Addons
+
+The sidebar has an **ADDONS** section for things that go on top of a finished server installation.
+An addon asks only for the server and the SSH key's password: it logs in as **root with the SSH key** that
+Install New Server saved in `configuration/keys/<server>/` (no account, no password, no SSH key step). Leave the
+key password empty when the key has none. Without a saved key for that server, it asks you to run Install New
+Server (its SSH key step) from this computer first.
+
+![Addon login with the saved SSH key](docs/screenshots/addon-key-login.png)
+
+### AtomCMS
+
+[AtomCMS](https://github.com/ObjectRetros/atomcms) becomes the hotel's website: visitors register and
+log in on the CMS, and the CMS opens Octane on **/client** with an SSO ticket. This automates
+[NGINX_Atom_setup.md](https://github.com/duckietm/Complete-Retro-on-Ubuntu/blob/main/NGINX_Atom_setup.md),
+adapted to this installer's layout. Run the full server installation first, from the same computer
+(the database login comes from `configuration/database/<server>/mariadb.txt`).
+
+![AtomCMS addon](docs/screenshots/atomcms-step.png)
+
+It asks for the hotel's name, then:
+
+1. **Clone or update** `https://github.com/ObjectRetros/atomcms` in `/var/www/atomcms` (git pull on a re-run).
+2. **.env** from `.env.example` (the old one is kept as `.env.bak-<time>`): `APP_NAME`, `APP_ENV=production`,
+   `APP_DEBUG=false`, `APP_URL`, MariaDB on 127.0.0.1 with the `cms` account, `FORCE_HTTPS` and
+   `SESSION_SECURE_COOKIE` for https, `RCON_PORT` from the emulator's `config.ini`.
+3. **composer install** (with the dev packages: AtomCMS' seeder uses Faker on an empty `users` table).
+4. **Database**: `php artisan key:generate` (once), `storage:link`, `migrate --seed` on the first install
+   (only `migrate` later). AtomCMS handles the emulator's own `password_resets` table itself, and only adds
+   columns with defaults to `users` and `camera_web`. On the first install the website settings are set for
+   this server:
+
+   | Setting | Value |
+   |---|---|
+   | `theme` | `atom` |
+   | `nitro_path` | `/client` |
+   | `nitro_external_texts_file` | `/var/www/gamedata/config/ExternalTexts.json` |
+   | `badges_path` / `badge_path_filesystem` | `/gamedata/c_images/album1584` / `/var/www/gamedata/c_images/album1584` |
+   | `group_badge_path` | `/gamedata/c_images/groupbadge/badge` |
+   | `furniture_icons_path` | `/gamedata/icons` |
+   | `ads_picture_path` / `ads_path_filesystem` | `/gamedata/custom` / `/var/www/gamedata/custom` |
+   | `rcon_ip` / `rcon_port` | `127.0.0.1` / the emulator's `rcon.port` |
+
+5. **Theme**: `npm ci` and `npm run build:atom` (the atom theme and the housekeeping).
+6. **Octane on /client**: in `package.json` (the change from the guide)
+
+   ```json
+   "start": "vite --base=/client/ --host",
+   "build": "vite --base=/client/ build && node scripts/minify-dist.mjs",
+   ```
+
+   `client-mode.json` gets `plainConfigBaseUrl` = `<url>/client/configuration/` (`plainGamedataBaseUrl` stays
+   `<url>/gamedata/`, `apiBaseUrl` stays `<url>`, through Traefik), `renderer-config.json` gets
+   `"login.screen.enabled": false`, and Octane is rebuilt. `build.sh` puts the `--base` back after a git pull,
+   and the Octane clone step undoes only that change before it pulls.
+7. **NGINX and Traefik**: the hotel site's root becomes `/var/www/atomcms/public` (PHP 8.5 through PHP-FPM),
+   with Octane's `dist/` on `/client/`; `/gamedata/` stays as it is. AtomCMS has an `/api` of its own, so
+   Traefik now sends only Polaris' paths to the emulator: `/ws`, `/nitro-sec` and
+   `/api/{auth,authx,badges,cms,emustats,health,housekeeping,maintenance,public,wired}`. Everything else goes to NGINX.
+   `/opt/traefik/hotel.env` gets `CMS=atom`, so the Web access and Octane steps keep this layout when they run again.
+8. **Test** through Traefik: the CMS, `/client/`, AtomCMS' `/api/online-count` and Polaris' `/api/health`.
+9. **Installation key**: AtomCMS makes the key for its web installer on the first visit, so the step opens
+   `/installation` and reads the key from `website_installation` (adding one itself if there is none). The key
+   is printed in the log, and shown under the result with a **Copy** button.
+
+The last page shows the installation key with a **Copy** button, to paste in **AtomCMS' web installer**, and the
+settings above, which the installer already has filled in. Register your account on the CMS and make it
+administrator (``UPDATE users SET `rank` = 7 WHERE username = 'YourName';``); the housekeeping is on `/housekeeping`.
+Captcha keys (Turnstile / reCAPTCHA) go in `/var/www/atomcms/.env`. To update AtomCMS later, run the addon again.
+
+![AtomCMS completed](docs/screenshots/atomcms-completed.png)
+
+## Tools
+
+The sidebar's **TOOLS** section is for running the hotel. The page shows the login at the top, the server tools
+below it and the settings backup at the bottom. The server tools are greyed out until you log in, like the addons:
+the server address and the SSH key's password, then root with the saved key.
+
+![Tools](docs/screenshots/tools.png)
+
+| Tool | What it does |
+|---|---|
+| **Server status** | opens a page with only the live dashboard (**Back to the tools** at the bottom, or click **Tools** in the sidebar), refreshed every 2 seconds while it is on screen: CPU (with load and cores), memory (and swap), network in/out with a graph that scales between B/s, KB/s and MB/s, uptime, emulator running and players online, disks with how full they are, the users logged in on the server (`who`), and the git branch, commit, date and last change of the emulator, Octane, Octane-Renderer (and AtomCMS), with the emulator's JAR version and the Octane / Renderer package versions. Everything is read from `/proc` in one short command per sample; nothing is installed on the server |
+| **Restart emulator** | `systemctl restart emulator` and waits until Polaris has loaded (asks first: everyone is disconnected) |
+| **Restart MariaDB** | restarts MariaDB and waits until it answers |
+| **Restart NGINX** | `nginx -t` first (a broken configuration is not restarted), then PHP-FPM 8.5 and NGINX; checks 127.0.0.1:85 |
+| **Restart Traefik** | `docker restart traefik`; waits for port 80 |
+| **Restart all** | MariaDB, emulator, NGINX + PHP-FPM, Traefik, in that order |
+| **Create full database backup** | `mariadb-dump --single-transaction --routines --triggers --events` of the hotel database into `/var/backups/all-in-1/<db>-<time>.sql.gz` (root only; the newest 10 are kept), then downloads it over SFTP to a file you choose (owner-only on Linux/macOS) |
+| **Import full database** | uploads a `.sql` or `.sql.gz`, makes a safety backup (`<db>-before-import-<time>.sql.gz`), stops the emulator, recreates the database with its character set and imports (database names in `CREATE DATABASE` / `USE` lines become the hotel's), clears AtomCMS' cache, and starts the emulator, which updates the database to its version. A file that is not a SQL dump is refused before anything changes |
+| **Update system** | `apt-get update`, `upgrade` and `dist-upgrade` (changed configuration files are kept); says when a reboot is needed |
+| **Update emulator** | `git pull` in `/var/www/emulator`; when there are new commits: `build.sh` and a restart. The start script runs the newest `target/*-jar-with-dependencies.jar`, so a new version number is picked up by itself; the result shows old → new version. No new commits: nothing is rebuilt or restarted |
+| **Update Octane** | `git pull` of Octane-Renderer and Octane, then in both `rm -rf node_modules yarn.lock` and `yarn install`, then the configuration for the site (keeps AtomCMS' `/client` layout), `yarn build` and a test. The next pull puts the repository's `yarn.lock` back first |
+
+**Settings backup** (no server needed): **Export encrypted settings** writes the whole configuration directory
+(SSH keys, .ppk files, MariaDB passwords of every server) to one `.aio-settings` file, encrypted with AES-256-GCM
+and a key derived from your password (PBKDF2-SHA256, 600,000 rounds). **Import encrypted settings** on another
+computer restores it; the settings already there are kept next to it as `configuration.bak-<time>`. A wrong
+password or a damaged file changes nothing.
+
+![Server status](docs/screenshots/server-status.png)
+
+![Server status: disks, users and versions](docs/screenshots/server-status-versions.png)
+
+![Restart all](docs/screenshots/tools-restart-all.png)
 
 ## Building
 
@@ -619,7 +727,7 @@ SourceCode/
   App/Gui/AvaloniaApp.cs                  Fluent theme + Professional theme
   App/Professional/ProfessionalTheme.cs   Colours, button styles and icons (shared with the converter)
   App/Professional/Views/InstallerWindow.cs   Sidebar, header, dashboard
-  App/Professional/Views/NewServerWizard.cs   "Install New Server" steps + connect page
+  App/Professional/Views/ServerWizard.cs  Login, connect and SSH key pages, then the install steps (server install and addons)
   App/Professional/Views/SshKeyStep.cs    SSH key page (generate / own key, install, test)
   App/Professional/Views/ExistingKeysDialog.cs  "Some keys are already present" dialog
   App/Professional/Views/InstallStep.cs   Base class of the install steps (intro, detection, run panel)
@@ -632,13 +740,19 @@ SourceCode/
   App/Professional/Views/WebAccessStep.cs Web access page (Cloudflare, http/https, address)
   App/Professional/Views/OctaneStep.cs    Octane page
   App/Professional/Views/HardenStep.cs    Harden page
-  App/Professional/Views/FinishedView.cs  Completed page: summary, WinSCP and where the assets go
+  App/Professional/Views/AtomCmsStep.cs   AtomCMS addon page
+  App/Professional/Views/ToolsView.cs     Tools page: server tools and the settings backup
+  App/Professional/Views/ServerStatusView.cs  Live server dashboard (Server status)
+  App/Professional/Views/LineChart.cs     Rolling line graph used by the dashboard
+  App/Professional/Views/PasswordDialog.cs  Password question (settings backup)
+  App/Professional/Views/FinishedView.cs  Completed pages: summary, WinSCP and where the assets go; AtomCMS' web installer
   App/Professional/Views/RunPanel.cs      Progress, check list, result and live log of an install step
   App/Professional/Views/ChoiceDialog.cs  Question with described answers
   App/Professional/Views/ProgressControls.cs    Check list and result banner
   App/Professional/Views/LogView.cs       Console output panel
   Configuration/ClientConfiguration.cs    The configuration/ directory on the client
   Configuration/DatabaseCredentials.cs    Generated MariaDB passwords and their file format
+  Configuration/SettingsBackup.cs         Encrypted export / import of the configuration directory
   Remote/ServerConnection.cs              SSH login, OS check, sudo -> root, RunAsRootAsync
   Remote/SshKeys.cs                       Key generation (encrypted OpenSSH format) and public key parsing
   Remote/BcryptPbkdf.cs                   bcrypt_pbkdf: turns the key password into the encryption key
@@ -652,5 +766,9 @@ SourceCode/
   Remote/WebAccessInstaller.cs            Docker Engine, NGINX on 127.0.0.1:85, Traefik (/opt/traefik), Polaris whitelist, tests
   Remote/OctaneInstaller.cs               yarn install, Octane configuration + gamedata folders, yarn build, serve dist/
   Remote/HardenInstaller.cs               ufw firewall, Polaris ws.whitelist / ws.ip.header, sysctl SYN flood settings
+  Remote/HotelSite.cs                     The hotel's NGINX site (Octane on /, or AtomCMS with Octane on /client/)
+  Remote/AtomCmsInstaller.cs              AtomCMS: .env, composer, migrations and settings, theme build, tests
+  Remote/ServerTools.cs                   Restarts, database backup / import, system and emulator updates
+  Remote/ServerStatus.cs                  Samples CPU, memory, network, disks, users and the git versions
   Remote/RemoteScript.cs                  Runs an install script as root with live output
 ```

@@ -56,6 +56,8 @@ public sealed class ToolsView
         var page = new StackPanel { Spacing = 16 };
         page.Children.Add(Text("Server tools", 15, weight: FontWeight.SemiBold));
         page.Children.Add(_hint);
+        page.Children.Add(Section("Status",
+            Tool("Server status", "Live CPU, memory, network, disks, users, versions", Icons.Info, ShowStatusAsync)));
         page.Children.Add(Section("Services",
             Tool("Restart emulator", "Disconnects everyone in the hotel", Icons.History, RestartEmulatorAsync),
             Tool("Restart MariaDB", "The emulator reconnects by itself", Icons.Database, RestartMariaDbAsync),
@@ -222,6 +224,7 @@ public sealed class ToolsView
         _runHost.Content = panel;
         run.Start();
         _run = run;
+        ScrollToResult();
         return run;
     }
 
@@ -264,6 +267,39 @@ public sealed class ToolsView
             run.Log($"  {reported} %  ({Size((long)done)} of {Size(total)})");
         };
     }
+
+    // ---------------------------------------------------------------- status
+
+    // Its own page: the dashboard samples while it is on screen, and stops when the page is left.
+    private Control? _statusPage;
+
+    /// <summary>Server status was clicked: the window shows <see cref="StatusPage"/> instead of the tiles.</summary>
+    public event Action? StatusRequested;
+    /// <summary>The Back button of the status page.</summary>
+    public event Action? BackRequested;
+
+    public Control StatusPage => _statusPage ??= BuildStatusPage();
+
+    private Control BuildStatusPage()
+    {
+        var back = new Button { Content = "Back to the tools", Padding = new Thickness(18, 9), Classes = { "secondary" }, HorizontalAlignment = HorizontalAlignment.Right };
+        back.Click += (_, _) => BackRequested?.Invoke();
+        var panel = new StackPanel { Spacing = 16 };
+        panel.Children.Add(new ServerStatusView(_connection));
+        panel.Children.Add(back);
+        return Card(panel, new Thickness(24, 20));
+    }
+
+    private Task ShowStatusAsync(Window owner, ServerConnection connection)
+    {
+        _run = null;
+        StatusRequested?.Invoke();
+        return Task.CompletedTask;
+    }
+
+    // The result area is under all the buttons: scroll it into view once it has been laid out.
+    private void ScrollToResult() =>
+        Dispatcher.UIThread.Post(() => (_runHost.Content as Control)?.BringIntoView(), DispatcherPriority.Background);
 
     // ---------------------------------------------------------------- services
 

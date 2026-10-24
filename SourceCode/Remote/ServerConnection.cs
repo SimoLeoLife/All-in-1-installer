@@ -52,6 +52,7 @@ public sealed class ServerConnection : IAsyncDisposable
     private readonly Action<string> _log;
     private readonly Action<ConnectStage> _stage;
     private readonly SshClient _client;
+    private readonly ConnectionInfo _info;
     private Elevation _elevation = Elevation.None;
 
     public string LoginUser { get; private set; } = "";
@@ -71,6 +72,7 @@ public sealed class ServerConnection : IAsyncDisposable
         {
             Timeout = TimeSpan.FromSeconds(20)
         };
+        _info = info;
         // Installs run for minutes; keep-alives stop routers and firewalls from dropping an idle-looking session.
         _client = new SshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(30) };
         _client.HostKeyReceived += (_, e) =>
@@ -204,6 +206,36 @@ public sealed class ServerConnection : IAsyncDisposable
         }
         _elevation = Elevation.SudoPassword;
         _log("  sudo accepted the password.");
+    }
+
+    /// <summary>
+    /// Copies a file from the server over SFTP, as the login user (the tools log in as root).
+    /// <paramref name="progress"/> gets the bytes copied so far.
+    /// </summary>
+    public Task DownloadAsync(string remotePath, string localPath, Action<ulong>? progress = null, CancellationToken token = default) =>
+        Task.Run(() =>
+        {
+            using SftpClient sftp = OpenSftp();
+            using FileStream file = File.Create(localPath);
+            sftp.DownloadFile(remotePath, file, bytes => progress?.Invoke(bytes));
+        }, token);
+
+    /// <summary>Copies a local file to the server over SFTP.</summary>
+    public Task UploadAsync(string localPath, string remotePath, Action<ulong>? progress = null, CancellationToken token = default) =>
+        Task.Run(() =>
+        {
+            using SftpClient sftp = OpenSftp();
+            using FileStream file = File.OpenRead(localPath);
+            sftp.UploadFile(file, remotePath, bytes => progress?.Invoke(bytes));
+        }, token);
+
+    private SftpClient OpenSftp()
+    {
+        var sftp = new SftpClient(_info);
+        // Only the server this session already trusts.
+        sftp.HostKeyReceived += (_, e) => e.CanTrust = $"{e.HostKeyName} SHA256:{e.FingerPrintSHA256}" == HostKeyFingerprint;
+        sftp.Connect();
+        return sftp;
     }
 
     public async Task<CommandResult> RunAsync(string command, CancellationToken token = default, string? input = null)

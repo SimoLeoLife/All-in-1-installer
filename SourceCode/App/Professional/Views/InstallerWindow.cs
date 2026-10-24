@@ -34,13 +34,16 @@ public sealed class InstallerWindow : Window
     private Button? _dashboardNavigation;
     private Button? _installNavigation;
     private Button? _atomNavigation;
+    private Button? _toolsNavigation;
     private Button? _aboutNavigation;
     private readonly ServerWizard _wizard;
     private readonly ServerWizard _atomWizard;
-    private ServerWizard[] Wizards => [_wizard, _atomWizard];
+    private readonly ServerWizard _toolsWizard;
+    private readonly ToolsView _tools;
+    private ServerWizard[] Wizards => [_wizard, _atomWizard, _toolsWizard];
     private bool AnyBusy => Wizards.Any(w => w.IsBusy);
     // The wizard on screen; the header and footer show its connection.
-    private ServerWizard Current => _page == Page.AtomCms ? _atomWizard : _wizard;
+    private ServerWizard Current => _page switch { Page.AtomCms => _atomWizard, Page.Tools => _toolsWizard, _ => _wizard };
 
     public InstallerWindow()
     {
@@ -59,6 +62,12 @@ public sealed class InstallerWindow : Window
         _atomWizard = new ServerWizard([atomStep],
             (_, _, site, _, steps) => FinishedView.BuildAtomCms(site, atomStep.InstallationKey, atomStep.InstallationCompleted, steps),
             "Web installer", keyLogin: true);
+        // No install steps: the wizard only logs in; the tools above it work while it is connected.
+        ToolsView? tools = null;
+        _toolsWizard = new ServerWizard([], (_, _, _, _, _) => tools!.Connected, "Use the tools", keyLogin: true, finishTitle: "Connected");
+        tools = new ToolsView(() => _toolsWizard.Connection, (busy, status) => _toolsWizard.SetExternalBusy(busy, status));
+        _tools = tools;
+        _toolsWizard.StateChanged += _tools.Refresh;
         foreach (ServerWizard wizard in Wizards)
         {
             wizard.StateChanged += () =>
@@ -163,6 +172,9 @@ public sealed class InstallerWindow : Window
         nav.Children.Add(SidebarLabel("ADDONS"));
         _atomNavigation = NavButton("AtomCMS", Icons.Puzzle, ShowAtomCms);
         nav.Children.Add(_atomNavigation);
+        nav.Children.Add(SidebarLabel("TOOLS"));
+        _toolsNavigation = NavButton("Tools", Icons.Wrench, ShowTools);
+        nav.Children.Add(_toolsNavigation);
         nav.Children.Add(SidebarLabel("GENERAL"));
         _aboutNavigation = NavButton("About", Icons.Info, ShowAbout);
         nav.Children.Add(_aboutNavigation);
@@ -242,7 +254,7 @@ public sealed class InstallerWindow : Window
         _pageScroll.Offset = default;
     }
 
-    private enum Page { Dashboard, Install, AtomCms, About }
+    private enum Page { Dashboard, Install, AtomCms, Tools, About }
     private Page _page;
 
     private void RefreshHeader()
@@ -251,6 +263,7 @@ public sealed class InstallerWindow : Window
         {
             Page.Install => ("Install New Server", "Log in to the Ubuntu / Debian server that will run the hotel."),
             Page.AtomCms => ("AtomCMS", "Addon: AtomCMS as the hotel's website, Octane on /client."),
+            Page.Tools => ("Tools", "Restart services, back up and import the database, update, and move your settings."),
             Page.About => ("About", "All-in-1 Installer"),
             _ => ("Dashboard", "Set up a complete hotel server over SSH.")
         };
@@ -287,7 +300,10 @@ public sealed class InstallerWindow : Window
             BuildComponentsCard(),
             Text("ADDONS", 11, "Pro.Muted", FontWeight.SemiBold),
             Tile("AtomCMS", "After the installation: AtomCMS (github.com/ObjectRetros/atomcms) as the hotel's website, Octane moves to /client.",
-                Icons.Puzzle, Color.Parse("#E8590C"), ShowAtomCms));
+                Icons.Puzzle, Color.Parse("#E8590C"), ShowAtomCms),
+            Text("TOOLS", 11, "Pro.Muted", FontWeight.SemiBold),
+            Tile("Tools", "Restart services, database backup and import, system / emulator / Octane updates, encrypted settings backup.",
+                Icons.Wrench, Color.Parse("#0E9F9E"), ShowTools));
         RefreshHeader();
         RefreshFooter();
     }
@@ -298,6 +314,16 @@ public sealed class InstallerWindow : Window
         ActivateNavigation(_installNavigation);
         ShowScrollPage(_wizard.View);
         _wizard.FocusCurrentStep();
+        RefreshHeader();
+        RefreshFooter();
+    }
+
+    private void ShowTools()
+    {
+        _page = Page.Tools;
+        ActivateNavigation(_toolsNavigation);
+        ShowScrollPage(_toolsWizard.View, _tools.Workspace, _tools.Settings);
+        _toolsWizard.FocusCurrentStep();
         RefreshHeader();
         RefreshFooter();
     }

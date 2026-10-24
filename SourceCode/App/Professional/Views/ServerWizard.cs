@@ -82,6 +82,7 @@ public sealed class ServerWizard : IAsyncDisposable
     private readonly InstallStep[] _installSteps;
     private readonly FinishPage _finishPage;
     private readonly string _finishCaption;
+    private readonly string _finishTitle;
     private readonly StepOutcome?[] _installOutcomes;
     // Failed this session and skipped afterwards, not fixed; for the summary.
     private readonly bool[] _installFailed;
@@ -113,8 +114,10 @@ public sealed class ServerWizard : IAsyncDisposable
     {
     }
 
-    public ServerWizard(InstallStep[] installSteps, FinishPage finishPage, string finishCaption, bool keyLogin)
+    public ServerWizard(InstallStep[] installSteps, FinishPage finishPage, string finishCaption, bool keyLogin,
+        string finishTitle = "Completed")
     {
+        _finishTitle = finishTitle;
         _installSteps = installSteps;
         _finishPage = finishPage;
         _finishCaption = finishCaption;
@@ -273,8 +276,10 @@ public sealed class ServerWizard : IAsyncDisposable
                 Render();
                 return;
             }
-            if (_keyLogin) await EnterInstallStepAsync(0);
-            else await EnterKeyStepAsync();
+            if (!_keyLogin) await EnterKeyStepAsync();
+            else if (_installSteps.Length > 0) await EnterInstallStepAsync(0);
+            // No install steps (Tools): the last page is the workspace.
+            else await EnterFinishAsync();
             return;
         }
         if (OnKeyStep)
@@ -384,7 +389,7 @@ public sealed class ServerWizard : IAsyncDisposable
             .Append((Title: "Connect", Caption: _keyLogin ? "Root with SSH key" : "Login & root"))
             .Concat(_keyLogin ? [] : [(Title: "SSH key", Caption: "authorized_keys")])
             .Concat(_installSteps.Select(s => (s.Title, s.Caption)))
-            .Append((Title: "Completed", Caption: _finishCaption))
+            .Append((Title: _finishTitle, Caption: _finishCaption))
             .ToArray();
         for (int i = 0; i < titles.Length; i++)
         {
@@ -486,7 +491,7 @@ public sealed class ServerWizard : IAsyncDisposable
         else
         {
             _buttons.Children.Add(_disconnect);
-            _next.Content = _keyLogin ? $"Next: {_installSteps[0].Title}" : "Next: SSH key";
+            _next.Content = !_keyLogin ? "Next: SSH key" : _installSteps.Length > 0 ? $"Next: {_installSteps[0].Title}" : $"Next: {_finishTitle}";
         }
         _buttons.Children.Add(_next);
     }
@@ -650,7 +655,7 @@ public sealed class ServerWizard : IAsyncDisposable
                     _ => StepSummary.NotRun
                 }));
             _finishView = _finishPage(host, connection.Login.Port, web.Configured, ppk, steps);
-            SetStatus("Installation completed.");
+            SetStatus(_installSteps.Length > 0 ? "Installation completed." : "Ready.");
         }
         finally
         {
@@ -828,6 +833,14 @@ public sealed class ServerWizard : IAsyncDisposable
         await Connection.DisposeAsync();
         Connection = null;
         SetStatus($"Disconnected from {host}.");
+    }
+
+    /// <summary>For a workspace on the last page (Tools): busy hides the buttons and blocks leaving the page.</summary>
+    public void SetExternalBusy(bool busy, string status)
+    {
+        IsBusy = busy;
+        Render();
+        SetStatus(status);
     }
 
     private void SetStatus(string message)

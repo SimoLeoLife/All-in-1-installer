@@ -134,7 +134,7 @@ public static class ClientConfiguration
         }
     }
 
-    private static void RestrictToOwner(string path, bool directory)
+    internal static void RestrictToOwner(string path, bool directory)
     {
         if (OperatingSystem.IsWindows()) return; // relies on inherited folder permissions
         File.SetUnixFileMode(path, directory

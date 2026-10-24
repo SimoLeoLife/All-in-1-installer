@@ -80,14 +80,24 @@ public static class OctaneInstaller
             values["uicamera"], values["emuimager"], values["configbase"]);
     }
 
-    /// <summary>Uses Yarn 4 through Corepack, as package.json pins.</summary>
-    public static Task YarnInstallAsync(ServerConnection connection, string directory, Action<string> log, CancellationToken token = default)
+    /// <summary>
+    /// Uses Yarn 4 through Corepack, as package.json pins. <paramref name="fresh"/> removes node_modules and
+    /// yarn.lock first, so every package is resolved again (the update tool).
+    /// </summary>
+    public static Task YarnInstallAsync(ServerConnection connection, string directory, Action<string> log, CancellationToken token = default,
+        bool fresh = false)
     {
         string script = RemoteScript.Prelude + $$"""
             {{Environment}}
             set -o pipefail
             command -v node >/dev/null && command -v yarn >/dev/null || fail "Node.js and Yarn are missing in /usr/bin. Run the Node.js step first."
             cd {{directory}}
+            {{(fresh ? """
+            echo "> rm -rf node_modules yarn.lock"
+            rm -rf node_modules yarn.lock
+            # CI mode makes Yarn refuse to write a lockfile; here a new one is the point.
+            export YARN_ENABLE_IMMUTABLE_INSTALLS=false
+            """ : "")}}
             echo "> cd {{directory}} && yarn install   (node $(node -v), yarn $(yarn --version))"
             # Filter Yarn's step frames, but keep its exit code.
             rc=$(mktemp)

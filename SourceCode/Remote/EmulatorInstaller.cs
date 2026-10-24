@@ -35,14 +35,14 @@ public static class EmulatorInstaller
     public const string AdoptiumKeyFingerprint = "3B04D753C9050D9A5D343F39843C48A565F8F04B";
 
     // Distribution OpenJDK or Temurin.
-    private const string FindJava = "ls -d /usr/lib/jvm/java-25-openjdk-* /usr/lib/jvm/temurin-25-jdk-* 2>/dev/null | head -1";
+    public const string FindJava = "ls -d /usr/lib/jvm/java-25-openjdk-* /usr/lib/jvm/temurin-25-jdk-* 2>/dev/null | head -1";
 
     // Falls back to the process when there is no systemd.
     private const string RunningCheck =
         "if [ -d /run/systemd/system ]; then systemctl is-active --quiet emulator; else pgrep -u emulator -f 'jar-with-dependencies' >/dev/null; fi";
 
-    // Expects $d and $log to be set.
-    private const string ControlFunctions = $$"""
+    // Shell functions emulator_running, stop_emulator, start_emulator and wait_loaded; expects $d and $log to be set.
+    public const string ControlFunctions = $$"""
         emulator_running() { {{RunningCheck}}; }
         stop_emulator() {
           # || true: pkill fails when nothing runs, which would end the script (set -e).

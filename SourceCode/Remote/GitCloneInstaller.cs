@@ -112,6 +112,12 @@ public static class GitCloneInstaller
               git -c safe.directory="$d" -C "$d" checkout -- package.json
               echo "  package.json: --base for /client/ undone for the pull (the Octane step sets it again)"
             fi
+            # The Octane update tool writes a new yarn.lock; the pull may bring its own.
+            if git -c safe.directory="$d" -C "$d" ls-files --error-unmatch yarn.lock >/dev/null 2>&1 &&
+               [ -n "$(git -c safe.directory="$d" -C "$d" status --porcelain -- yarn.lock)" ]; then
+              git -c safe.directory="$d" -C "$d" checkout -- yarn.lock
+              echo "  yarn.lock: the locally generated one is replaced by the repository's for the pull"
+            fi
             changed=$(git -c safe.directory="$d" -C "$d" status --porcelain --untracked-files=no)
             if [ -n "$changed" ]; then
               echo "$changed" | head -20

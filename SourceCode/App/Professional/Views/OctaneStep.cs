@@ -52,11 +52,14 @@ public sealed class OctaneStep : InstallStep
         }
         if (state.IsComplete)
         {
-            Detected.Show(ResultKind.Success, $"Octane is built and served on {state.Site.Url}",
+            Detected.Show(ResultKind.Success, $"Octane is built and served on {state.Site.ClientUrl}",
                 $"socket.url {state.ConfiguredSocketUrl}. You can skip this step, or configure and rebuild it (e.g. after a git pull).");
             return true;
         }
-        if (state.Built && state.ConfiguredSocketUrl != state.ExpectedSocketUrl)
+        if (state.Built && state.ConfiguredSocketUrl == state.ExpectedSocketUrl && !state.LayoutConfigured)
+            Detected.Show(ResultKind.Info, $"Octane will be rebuilt for {state.Site.ClientUrl}",
+                state.Site.AtomCms ? "AtomCMS is the site now: Octane moves to /client/." : "Octane is served from the site root.");
+        else if (state.Built && state.ConfiguredSocketUrl != state.ExpectedSocketUrl)
             Detected.Show(ResultKind.Info, "Octane is built for another address",
                 $"socket.url is {state.ConfiguredSocketUrl ?? "not set"}; it becomes {state.ExpectedSocketUrl}.");
         else
@@ -74,7 +77,8 @@ public sealed class OctaneStep : InstallStep
         if (!state.OctanePresent) throw new ServerConnectionException($"{OctaneInstaller.Octane} has no package.json. Run the Octane clone step first.");
         if (!state.RendererPresent) throw new ServerConnectionException($"{OctaneInstaller.Renderer} has no package.json. Run the Renderer clone step first.");
         if (state.NodeVersion is null) throw new ServerConnectionException("Node.js is not installed in /usr/bin. Run the Node.js step first.");
-        Run.Log($"  {site.Url}: socket {OctaneInstaller.SocketUrl(site)}, Node.js {state.NodeVersion}");
+        Run.Log($"  {site.ClientUrl}: socket {OctaneInstaller.SocketUrl(site)}, Node.js {state.NodeVersion}");
+        if (site.AtomCms) Run.Log($"  AtomCMS is the site: Octane is built for {site.ClientPath} and opened by the CMS.");
         Run.Done(site.Url);
 
         // Renderer first: Octane builds against its sources and node_modules.
@@ -86,21 +90,21 @@ public sealed class OctaneStep : InstallStep
         await Task.Run(() => OctaneInstaller.ConfigureAsync(connection, site, Run.Log));
         Run.Done(OctaneInstaller.SocketUrl(site));
 
-        await Task.Run(() => OctaneInstaller.BuildAsync(connection, Run.Log));
+        await Task.Run(() => OctaneInstaller.BuildAsync(connection, site, Run.Log));
         Run.Done("dist/");
 
         await Task.Run(() => OctaneInstaller.PublishAsync(connection, site, Run.Log));
-        Run.Done(site.Url);
+        Run.Done(site.ClientUrl);
 
         // The emulator writes camera photos into gamedata/camera.
         bool camera = await Task.Run(() => EmulatorInstaller.ConfigureImagerAsync(connection, site.Url, Run.Log));
         Run.Done(camera ? $"{site.Url}/gamedata/camera/" : "emulator not set up yet");
 
         if (!camera)
-            return await SucceededWithWarningAsync($"Octane is served on {site.Url}",
+            return await SucceededWithWarningAsync($"Octane is served on {site.ClientUrl}",
                 "The emulator is not set up yet, so its camera and badge settings are not set: run the Emulator step, then this step again. " +
                 $"Copy the game assets into {OctaneInstaller.Gamedata} with the All-in-1 download tool.");
-        return await SucceededAsync($"Octane is served on {site.Url}",
+        return await SucceededAsync($"Octane is served on {site.ClientUrl}",
             $"Copy the game assets into {OctaneInstaller.Gamedata} (the folders are there) with the All-in-1 download tool. " +
             $"After changing {OctaneInstaller.ConfigurationDirectory}, run {OctaneInstaller.Octane}/build.sh.");
     }

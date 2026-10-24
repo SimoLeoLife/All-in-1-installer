@@ -14,6 +14,8 @@ public sealed class RunPanel : StackPanel
 
     public CheckList Checks { get; }
     public ResultBanner Result { get; } = new();
+    /// <summary>Under the result box, e.g. a value to copy; emptied when the step runs again.</summary>
+    public ContentControl Extra { get; } = new();
 
     public RunPanel(double logHeight, params string[] checks)
     {
@@ -23,6 +25,7 @@ public sealed class RunPanel : StackPanel
         Children.Add(_progress);
         Children.Add(Checks);
         Children.Add(Result);
+        Children.Add(Extra);
         Children.Add(_log);
     }
 
@@ -40,6 +43,7 @@ public sealed class RunPanel : StackPanel
         _lines.Clear();
         _log.ResetFollow();
         Result.Hide();
+        Extra.Content = null;
         Checks.Reset();
         _stage = 0;
         Busy = true;

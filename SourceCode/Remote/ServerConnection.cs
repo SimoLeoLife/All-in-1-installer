@@ -3,8 +3,12 @@ using Renci.SshNet.Common;
 
 namespace AllInOneInstaller.Remote;
 
-public sealed record ServerLogin(string Host, int Port, string User, string Password)
+/// <summary>A password login, or with <paramref name="PrivateKeys"/> a key login (the addons log in as root with the saved keys).</summary>
+public sealed record ServerLogin(string Host, int Port, string User, string Password, IReadOnlyList<string>? PrivateKeys = null,
+    string KeyPassphrase = "")
 {
+    public bool UsesKey => PrivateKeys is { Count: > 0 };
+
     /// <summary>Parses "host", "host:port" or "[ipv6]:port"; the port defaults to 22.</summary>
     public static (string Host, int Port) ParseHost(string text)
     {
@@ -63,14 +67,7 @@ public sealed class ServerConnection : IAsyncDisposable
         _log = log;
         _stage = stage;
 
-        var keyboard = new KeyboardInteractiveAuthenticationMethod(login.User);
-        // Ubuntu and Debian often only offer keyboard-interactive (PAM) for password logins.
-        keyboard.AuthenticationPrompt += (_, e) =>
-        {
-            foreach (AuthenticationPrompt prompt in e.Prompts) prompt.Response = login.Password;
-        };
-        var info = new ConnectionInfo(login.Host, login.Port, login.User,
-            new PasswordAuthenticationMethod(login.User, login.Password), keyboard)
+        var info = new ConnectionInfo(login.Host, login.Port, login.User, AuthenticationMethods(login))
         {
             Timeout = TimeSpan.FromSeconds(20)
         };
@@ -81,6 +78,42 @@ public sealed class ServerConnection : IAsyncDisposable
             HostKeyFingerprint = $"{e.HostKeyName} SHA256:{e.FingerPrintSHA256}";
             e.CanTrust = true;
         };
+    }
+
+    private static AuthenticationMethod[] AuthenticationMethods(ServerLogin login)
+    {
+        if (login.UsesKey)
+        {
+            var files = new List<IPrivateKeySource>();
+            string? problem = null;
+            foreach (string path in login.PrivateKeys!)
+            {
+                try
+                {
+                    files.Add(new PrivateKeyFile(path, login.KeyPassphrase.Length > 0 ? login.KeyPassphrase : null));
+                }
+                catch (SshPassPhraseNullOrEmptyException)
+                {
+                    problem = $"The SSH key {Path.GetFileName(path)} has a password: enter it as the key password.";
+                }
+                catch (Exception ex) when (ex is SshException or IOException or InvalidOperationException or ArgumentException)
+                {
+                    problem = login.KeyPassphrase.Length > 0
+                        ? $"The SSH key {Path.GetFileName(path)} could not be opened: wrong key password?"
+                        : $"The SSH key {Path.GetFileName(path)} could not be opened: {ex.Message}";
+                }
+            }
+            if (files.Count == 0) throw new ServerConnectionException(problem ?? "No SSH key to log in with.");
+            return [new PrivateKeyAuthenticationMethod(login.User, files.ToArray())];
+        }
+
+        var keyboard = new KeyboardInteractiveAuthenticationMethod(login.User);
+        // Ubuntu and Debian often only offer keyboard-interactive (PAM) for password logins.
+        keyboard.AuthenticationPrompt += (_, e) =>
+        {
+            foreach (AuthenticationPrompt prompt in e.Prompts) prompt.Response = login.Password;
+        };
+        return [new PasswordAuthenticationMethod(login.User, login.Password), keyboard];
     }
 
     /// <summary>Logs in, checks the distribution and verifies root access.</summary>
@@ -103,14 +136,17 @@ public sealed class ServerConnection : IAsyncDisposable
     private async Task OpenAsync(CancellationToken token)
     {
         _stage(ConnectStage.Login);
-        _log($"> Connecting to {_login.Host}:{_login.Port} as {_login.User} ...");
+        _log($"> Connecting to {_login.Host}:{_login.Port} as {_login.User}" +
+             (_login.UsesKey ? $" with the SSH key {string.Join(", ", _login.PrivateKeys!.Select(Path.GetFileName))} ..." : " ..."));
         try
         {
             await _client.ConnectAsync(token);
         }
         catch (SshAuthenticationException ex)
         {
-            throw new ServerConnectionException($"Login refused for user '{_login.User}': wrong user name or password.", ex);
+            throw new ServerConnectionException(_login.UsesKey
+                ? $"The server refused the SSH key for '{_login.User}'. Is it still in /root/.ssh/authorized_keys, and does sshd allow root logins with a key (PermitRootLogin prohibit-password)?"
+                : $"Login refused for user '{_login.User}': wrong user name or password.", ex);
         }
         catch (Exception ex) when (ex is SshException or System.Net.Sockets.SocketException or TimeoutException or SshOperationTimeoutException)
         {

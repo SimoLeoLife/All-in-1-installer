@@ -33,8 +33,14 @@ public sealed class InstallerWindow : Window
     private readonly List<Button> _navigationButtons = [];
     private Button? _dashboardNavigation;
     private Button? _installNavigation;
+    private Button? _atomNavigation;
     private Button? _aboutNavigation;
-    private readonly NewServerWizard _wizard;
+    private readonly ServerWizard _wizard;
+    private readonly ServerWizard _atomWizard;
+    private ServerWizard[] Wizards => [_wizard, _atomWizard];
+    private bool AnyBusy => Wizards.Any(w => w.IsBusy);
+    // The wizard on screen; the header and footer show its connection.
+    private ServerWizard Current => _page == Page.AtomCms ? _atomWizard : _wizard;
 
     public InstallerWindow()
     {
@@ -48,21 +54,31 @@ public sealed class InstallerWindow : Window
         RequestedThemeVariant = ThemeVariant.Default;
         this.Bind(BackgroundProperty, "Pro.Surface");
 
-        _wizard = new NewServerWizard();
-        _wizard.StateChanged += () =>
+        _wizard = new ServerWizard();
+        var atomStep = new AtomCmsStep();
+        _atomWizard = new ServerWizard([atomStep],
+            (_, _, site, _, steps) => FinishedView.BuildAtomCms(site, atomStep.InstallationKey, atomStep.InstallationCompleted, steps),
+            "Web installer", keyLogin: true);
+        foreach (ServerWizard wizard in Wizards)
         {
-            RefreshHeader();
-            RefreshFooter();
-        };
-        _wizard.Exited += ShowDashboard;
+            wizard.StateChanged += () =>
+            {
+                RefreshHeader();
+                RefreshFooter();
+            };
+            wizard.Exited += ShowDashboard;
+        }
         Content = BuildLayout();
         Closing += (_, e) =>
         {
-            if (!_wizard.IsBusy) return;
+            if (!AnyBusy) return;
             e.Cancel = true;
-            _status.Text = "Wait until the connection attempt has finished before closing.";
+            _status.Text = "Wait until the running step has finished before closing.";
         };
-        Closed += async (_, _) => await _wizard.DisposeAsync();
+        Closed += async (_, _) =>
+        {
+            foreach (ServerWizard wizard in Wizards) await wizard.DisposeAsync();
+        };
         ShowDashboard();
     }
 
@@ -144,6 +160,9 @@ public sealed class InstallerWindow : Window
         nav.Children.Add(SidebarLabel("SERVER"));
         _installNavigation = NavButton("Install New Server", Icons.ServerPlus, ShowInstallNewServer);
         nav.Children.Add(_installNavigation);
+        nav.Children.Add(SidebarLabel("ADDONS"));
+        _atomNavigation = NavButton("AtomCMS", Icons.Puzzle, ShowAtomCms);
+        nav.Children.Add(_atomNavigation);
         nav.Children.Add(SidebarLabel("GENERAL"));
         _aboutNavigation = NavButton("About", Icons.Info, ShowAbout);
         nav.Children.Add(_aboutNavigation);
@@ -193,7 +212,7 @@ public sealed class InstallerWindow : Window
         };
         button.Click += (_, _) =>
         {
-            if (_wizard.IsBusy) return;
+            if (AnyBusy) return;
             action();
         };
         _navigationButtons.Add(button);
@@ -223,7 +242,7 @@ public sealed class InstallerWindow : Window
         _pageScroll.Offset = default;
     }
 
-    private enum Page { Dashboard, Install, About }
+    private enum Page { Dashboard, Install, AtomCms, About }
     private Page _page;
 
     private void RefreshHeader()
@@ -231,13 +250,14 @@ public sealed class InstallerWindow : Window
         (_title.Text, _subtitle.Text) = _page switch
         {
             Page.Install => ("Install New Server", "Log in to the Ubuntu / Debian server that will run the hotel."),
+            Page.AtomCms => ("AtomCMS", "Addon: AtomCMS as the hotel's website, Octane on /client."),
             Page.About => ("About", "All-in-1 Installer"),
             _ => ("Dashboard", "Set up a complete hotel server over SSH.")
         };
 
-        (string text, string back, string fore) = _wizard.Connection is { } c
+        (string text, string back, string fore) = Current.Connection is { } c
             ? ($"Root on {c.Login.Host}", "Pro.SuccessBack", "Pro.SuccessText")
-            : _wizard.IsBusy
+            : Current.IsBusy
                 ? ("Connecting", "Pro.InfoBack", "Pro.InfoText")
                 : ("Not connected", "Pro.Hover", "Pro.Muted");
         _statusPillText.Text = text;
@@ -248,11 +268,11 @@ public sealed class InstallerWindow : Window
 
     private void RefreshFooter()
     {
-        ServerConnection? connection = _wizard.Connection;
+        ServerConnection? connection = Current.Connection;
         _connectionFooter.Text = connection is null
             ? "No server connected"
             : $"{connection.LoginUser}@{connection.Login.Host}:{connection.Login.Port}  ·  {connection.Os?.PrettyName}";
-        _status.Text = _wizard.StatusMessage;
+        _status.Text = Current.StatusMessage;
     }
 
     // ---------------------------------------------------------------- pages
@@ -261,8 +281,15 @@ public sealed class InstallerWindow : Window
     {
         _page = Page.Dashboard;
         ActivateNavigation(_dashboardNavigation);
-        ShowScrollPage(BuildInstallTile(), BuildComponentsCard());
+        ShowScrollPage(
+            Tile("Install New Server", "Connect to a fresh Ubuntu Server / Debian machine and install the full hotel stack.",
+                Icons.ServerPlus, Brand, ShowInstallNewServer),
+            BuildComponentsCard(),
+            Text("ADDONS", 11, "Pro.Muted", FontWeight.SemiBold),
+            Tile("AtomCMS", "After the installation: AtomCMS (github.com/ObjectRetros/atomcms) as the hotel's website, Octane moves to /client.",
+                Icons.Puzzle, Color.Parse("#E8590C"), ShowAtomCms));
         RefreshHeader();
+        RefreshFooter();
     }
 
     private void ShowInstallNewServer()
@@ -272,6 +299,17 @@ public sealed class InstallerWindow : Window
         ShowScrollPage(_wizard.View);
         _wizard.FocusCurrentStep();
         RefreshHeader();
+        RefreshFooter();
+    }
+
+    private void ShowAtomCms()
+    {
+        _page = Page.AtomCms;
+        ActivateNavigation(_atomNavigation);
+        ShowScrollPage(_atomWizard.View);
+        _atomWizard.FocusCurrentStep();
+        RefreshHeader();
+        RefreshFooter();
     }
 
     private void ShowAbout()
@@ -286,10 +324,9 @@ public sealed class InstallerWindow : Window
         RefreshHeader();
     }
 
-    private Control BuildInstallTile()
+    private Control Tile(string title, string description, string iconPath, Color color, Action open)
     {
-        Color color = Brand;
-        var icon = Icon(Icons.ServerPlus, 26);
+        var icon = Icon(iconPath, 26);
         icon.Foreground = Solid(color);
         var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 18 };
         grid.Children.Add(new Border
@@ -302,8 +339,8 @@ public sealed class InstallerWindow : Window
             Child = icon
         });
         var text = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
-        text.Children.Add(Text("Install New Server", 17, weight: FontWeight.SemiBold));
-        text.Children.Add(Text("Connect to a fresh Ubuntu Server / Debian machine and install the full hotel stack.", 12.5, "Pro.Muted"));
+        text.Children.Add(Text(title, 17, weight: FontWeight.SemiBold));
+        text.Children.Add(Text(description, 12.5, "Pro.Muted"));
         Grid.SetColumn(text, 1);
         grid.Children.Add(text);
         var chevron = Icon(Icons.ChevronRight, 22).Bind(PathIcon.ForegroundProperty, "Pro.Subtle");
@@ -323,8 +360,8 @@ public sealed class InstallerWindow : Window
         };
         tile.Click += (_, _) =>
         {
-            if (_wizard.IsBusy && _page != Page.Install) return;
-            ShowInstallNewServer();
+            if (AnyBusy) return;
+            open();
         };
         return tile;
     }

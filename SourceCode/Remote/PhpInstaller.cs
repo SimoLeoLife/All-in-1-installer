@@ -37,7 +37,7 @@ public static class PhpInstaller
     private static readonly string[] Extensions =
         ["mysqli", "pdo_mysql", "xml", "xmlrpc", "curl", "gd", "imagick", "mbstring", "soap", "zip", "intl", "bcmath"];
 
-    private const string Socket = "/run/php/php8.5-fpm.sock";
+    public const string Socket = "/run/php/php8.5-fpm.sock";
 
 
     // Only the numeric x.y.z prefix is compared.

@@ -11,17 +11,25 @@ using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 
 namespace AllInOneInstaller.App.Professional.Views;
 
+/// <summary>The last wizard page, from what the steps did.</summary>
+public delegate Control FinishPage(string host, int sshPort, WebAccessSettings? site, string? puttyKey,
+    IReadOnlyList<(string Title, StepSummary Result)> steps);
+
 /// <summary>
-/// "Install New Server": asks host, account and password one at a time, logs in over SSH, switches to root
-/// (sudo when the account is not root), then installs an SSH key for root.
+/// "Install New Server" asks host, account and password one at a time, logs in over SSH, switches to root (sudo
+/// when the account is not root) and installs an SSH key for root. The addons log in as root with that saved key
+/// instead. Then the install steps run.
 /// </summary>
-public sealed class NewServerWizard : IAsyncDisposable
+public sealed class ServerWizard : IAsyncDisposable
 {
     private sealed record Step(string Title, string Caption, string Icon, string Heading, string Help, TextBox? Input);
 
     private readonly TextBox _host = new() { PlaceholderText = "192.168.1.10 or hotel.example.com (add :2222 for another SSH port)" };
     private readonly TextBox _user = new() { PlaceholderText = "root or a user with sudo rights" };
     private readonly TextBox _password = new() { PlaceholderText = "Password of the account", PasswordChar = '•', RevealPassword = false };
+    private readonly TextBox _keyPassword = new() { PlaceholderText = "Leave empty when the key has no password", PasswordChar = '•', RevealPassword = false };
+    // Log in as root with the key the SSH key step saved, instead of account + password + SSH key step.
+    private readonly bool _keyLogin;
     private readonly Step[] _steps;
     private readonly Control[] _questions;
     private int _index;
@@ -57,8 +65,8 @@ public sealed class NewServerWizard : IAsyncDisposable
     private readonly SshKeyStep _keyStep = new();
     private KeyStepOutcome? _keyOutcome;
 
-    // Install steps after the SSH key, in order. A new step only needs adding here.
-    private readonly InstallStep[] _installSteps =
+    /// <summary>The full server installation, in order. A new step only needs adding here.</summary>
+    public static InstallStep[] ServerSteps() =>
     [
         new NginxStep(), new PhpStep(), new MariaDbStep(), new DevToolsStep(),
         new CloneStep("Polaris", "Emulator", "duckietm/Polaris-Emulator", "/var/www/emulator",
@@ -69,6 +77,11 @@ public sealed class NewServerWizard : IAsyncDisposable
             "The Octane Renderer: draws rooms, avatars and furniture for Octane."),
         new EmulatorStep(), new WebAccessStep(), new OctaneStep(), new HardenStep()
     ];
+
+    // Install steps after the SSH key, in order.
+    private readonly InstallStep[] _installSteps;
+    private readonly FinishPage _finishPage;
+    private readonly string _finishCaption;
     private readonly StepOutcome?[] _installOutcomes;
     // Failed this session and skipped afterwards, not fixed; for the summary.
     private readonly bool[] _installFailed;
@@ -83,10 +96,11 @@ public sealed class NewServerWizard : IAsyncDisposable
     public event Action? Exited;
 
     private int ConnectIndex => _steps.Length;
-    private int KeyIndex => _steps.Length + 1;
+    // With a key login there is no SSH key step.
+    private int KeyIndex => _keyLogin ? -1 : _steps.Length + 1;
     private bool OnConnectStep => _index == ConnectIndex;
     private bool OnKeyStep => _index == KeyIndex;
-    private int FirstInstallIndex => _steps.Length + 2;
+    private int FirstInstallIndex => _steps.Length + (_keyLogin ? 1 : 2);
     private bool OnInstallStep => _index >= FirstInstallIndex && _index < FirstInstallIndex + _installSteps.Length;
     // Index of the summary page.
     private int FinishIndex => FirstInstallIndex + _installSteps.Length;
@@ -95,9 +109,24 @@ public sealed class NewServerWizard : IAsyncDisposable
     private int InstallStepIndex => _index - FirstInstallIndex;
     private bool OnQuestion => _index < _steps.Length;
 
-    public NewServerWizard()
+    public ServerWizard() : this(ServerSteps(), FinishedView.Build, "Upload assets", keyLogin: false)
     {
-        _steps =
+    }
+
+    public ServerWizard(InstallStep[] installSteps, FinishPage finishPage, string finishCaption, bool keyLogin)
+    {
+        _installSteps = installSteps;
+        _finishPage = finishPage;
+        _finishCaption = finishCaption;
+        _keyLogin = keyLogin;
+        _steps = keyLogin ?
+        [
+            new("Server", "IP / Hostname", Icons.Server, "Server IP / Hostname",
+                "The server you installed with Install New Server, as you entered it there (with :port for another SSH port). " +
+                "The installer logs in as root with the SSH key it saved for that server in configuration/keys/<server>/.", _host),
+            new("Key", "SSH key password", Icons.Key, "SSH key password",
+                "The password you gave the SSH key when it was generated. Leave it empty when the key has no password.", _keyPassword)
+        ] :
         [
             new("Server", "IP / Hostname", Icons.Server, "Server IP / Hostname",
                 "The address of the Ubuntu Server or Debian machine. SSH must be reachable (port 22 unless you add another one).", _host),
@@ -111,7 +140,7 @@ public sealed class NewServerWizard : IAsyncDisposable
         _log = new LogView(_logLines) { Height = 220 };
         _connectBody = BuildConnectBody();
 
-        foreach (TextBox box in new[] { _host, _user, _password })
+        foreach (TextBox box in new[] { _host, _user, _password, _keyPassword })
         {
             box.FontSize = 14;
             box.Padding = new Thickness(12, 9);
@@ -181,8 +210,9 @@ public sealed class NewServerWizard : IAsyncDisposable
         {
             if (IsBusy) return;
             await DisconnectAsync();
-            // Start clean next time; the password is not kept.
+            // Start clean next time; the passwords are not kept.
             _password.Text = "";
+            _keyPassword.Text = "";
             _keyOutcome = null;
             Array.Clear(_installOutcomes);
             _index = 0;
@@ -205,7 +235,7 @@ public sealed class NewServerWizard : IAsyncDisposable
         // When the captions of all steps do not fit (about 115 px each), only the current step keeps its caption.
         View.SizeChanged += (_, e) =>
         {
-            int count = _steps.Length + 2 + _installSteps.Length + 1;
+            int count = FirstInstallIndex + _installSteps.Length + 1;
             bool compact = e.NewSize.Width < count * 115;
             if (compact == _compactStepper) return;
             _compactStepper = compact;
@@ -226,7 +256,7 @@ public sealed class NewServerWizard : IAsyncDisposable
 
     private void Back()
     {
-        if (IsBusy || _index == 0 || _index >= KeyIndex) return;
+        if (IsBusy || _index == 0 || _index > ConnectIndex) return;
         _index--;
         Render();
     }
@@ -243,7 +273,8 @@ public sealed class NewServerWizard : IAsyncDisposable
                 Render();
                 return;
             }
-            await EnterKeyStepAsync();
+            if (_keyLogin) await EnterInstallStepAsync(0);
+            else await EnterKeyStepAsync();
             return;
         }
         if (OnKeyStep)
@@ -272,25 +303,27 @@ public sealed class NewServerWizard : IAsyncDisposable
 
     private string? Validate(int index)
     {
-        switch (index)
+        TextBox? input = _steps[index].Input;
+        if (input == _host)
         {
-            case 0:
-                if (string.IsNullOrWhiteSpace(_host.Text)) return "Enter the server IP address or hostname.";
-                (string host, int port) = ServerLogin.ParseHost(_host.Text);
-                if (host.Length == 0 || host.Any(char.IsWhiteSpace)) return "That is not a valid IP address or hostname.";
-                if (port is < 1 or > 65535) return "The SSH port must be between 1 and 65535.";
-                if (Uri.CheckHostName(host) == UriHostNameType.Unknown) return "That is not a valid IP address or hostname.";
-                return null;
-            case 1:
-                string user = _user.Text?.Trim() ?? "";
-                if (user.Length == 0) return "Enter the user account to log in with.";
-                if (user.Any(c => char.IsWhiteSpace(c) || c == ':' || c == '@')) return "A user name cannot contain spaces, ':' or '@'.";
-                return null;
-            case 2:
-                return string.IsNullOrEmpty(_password.Text) ? "Enter the password." : null;
-            default:
-                return null;
+            if (string.IsNullOrWhiteSpace(_host.Text)) return "Enter the server IP address or hostname.";
+            (string host, int port) = ServerLogin.ParseHost(_host.Text);
+            if (host.Length == 0 || host.Any(char.IsWhiteSpace)) return "That is not a valid IP address or hostname.";
+            if (port is < 1 or > 65535) return "The SSH port must be between 1 and 65535.";
+            if (Uri.CheckHostName(host) == UriHostNameType.Unknown) return "That is not a valid IP address or hostname.";
+            if (_keyLogin && ClientConfiguration.SavedPrivateKeys(host).Count == 0)
+                return $"There is no SSH key for {host} in configuration/keys/{host}/. Run Install New Server (its SSH key step) for this server first, from this computer.";
+            return null;
         }
+        if (input == _user)
+        {
+            string user = _user.Text?.Trim() ?? "";
+            if (user.Length == 0) return "Enter the user account to log in with.";
+            if (user.Any(c => char.IsWhiteSpace(c) || c == ':' || c == '@')) return "A user name cannot contain spaces, ':' or '@'.";
+            return null;
+        }
+        if (input == _password) return string.IsNullOrEmpty(_password.Text) ? "Enter the password." : null;
+        return null;
     }
 
     // ---------------------------------------------------------------- rendering
@@ -348,10 +381,10 @@ public sealed class NewServerWizard : IAsyncDisposable
         _stepper.Children.Clear();
         _stepper.ColumnDefinitions.Clear();
         var titles = _steps.Select(s => (s.Title, s.Caption))
-            .Append((Title: "Connect", Caption: "Login & root"))
-            .Append((Title: "SSH key", Caption: "authorized_keys"))
+            .Append((Title: "Connect", Caption: _keyLogin ? "Root with SSH key" : "Login & root"))
+            .Concat(_keyLogin ? [] : [(Title: "SSH key", Caption: "authorized_keys")])
             .Concat(_installSteps.Select(s => (s.Title, s.Caption)))
-            .Append((Title: "Completed", Caption: "Upload assets"))
+            .Append((Title: "Completed", Caption: _finishCaption))
             .ToArray();
         for (int i = 0; i < titles.Length; i++)
         {
@@ -453,7 +486,7 @@ public sealed class NewServerWizard : IAsyncDisposable
         else
         {
             _buttons.Children.Add(_disconnect);
-            _next.Content = "Next: SSH key";
+            _next.Content = _keyLogin ? $"Next: {_installSteps[0].Title}" : "Next: SSH key";
         }
         _buttons.Children.Add(_next);
     }
@@ -602,12 +635,11 @@ public sealed class NewServerWizard : IAsyncDisposable
                 ? Directory.GetFiles(ClientConfiguration.KeysDirectory(host), "*.ppk").OrderByDescending(File.GetLastWriteTimeUtc).FirstOrDefault()
                 : null;
 
-            var steps = new List<(string, StepSummary)>
-            {
-                ("SSH key", _keyOutcome == KeyStepOutcome.Installed ? StepSummary.Done
+            var steps = new List<(string, StepSummary)>();
+            if (!_keyLogin)
+                steps.Add(("SSH key", _keyOutcome == KeyStepOutcome.Installed ? StepSummary.Done
                     : _keyAlreadyInstalled ? StepSummary.AlreadyInstalled
-                    : _keyOutcome == KeyStepOutcome.Failed ? StepSummary.Failed : StepSummary.Skipped)
-            };
+                    : _keyOutcome == KeyStepOutcome.Failed ? StepSummary.Failed : StepSummary.Skipped));
             for (int i = 0; i < _installSteps.Length; i++)
                 steps.Add((StepName(i), _installOutcomes[i] switch
                 {
@@ -617,8 +649,8 @@ public sealed class NewServerWizard : IAsyncDisposable
                     StepOutcome.Skipped => StepSummary.Skipped,
                     _ => StepSummary.NotRun
                 }));
-            _finishView = FinishedView.Build(host, connection.Login.Port, web.Configured, ppk, steps);
-            SetStatus("Installation completed: upload the assets.");
+            _finishView = _finishPage(host, connection.Login.Port, web.Configured, ppk, steps);
+            SetStatus("Installation completed.");
         }
         finally
         {
@@ -731,7 +763,9 @@ public sealed class NewServerWizard : IAsyncDisposable
     private async Task ConnectAsync()
     {
         (string host, int port) = ServerLogin.ParseHost(_host.Text ?? "");
-        var login = new ServerLogin(host, port, _user.Text!.Trim(), _password.Text ?? "");
+        var login = _keyLogin
+            ? new ServerLogin(host, port, "root", "", ClientConfiguration.SavedPrivateKeys(host), _keyPassword.Text ?? "")
+            : new ServerLogin(host, port, _user.Text!.Trim(), _password.Text ?? "");
 
         IsBusy = true;
         _logLines.Clear();
@@ -761,11 +795,11 @@ public sealed class NewServerWizard : IAsyncDisposable
             await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
             _checks.SetDetail(0, $"{Connection.LoginUser}@{host}:{port}");
             _checks.SetDetail(1, Connection.Os?.PrettyName ?? "");
-            _checks.SetDetail(2, Connection.LoginUser == "root" ? "logged in as root" : "through sudo");
+            _checks.SetDetail(2, login.UsesKey ? "SSH key" : Connection.LoginUser == "root" ? "logged in as root" : "through sudo");
             stage = _checks.Count;
             _checks.Update(stage, failed: false);
             _result.Show(ResultKind.Success, $"Connected to {host} as root",
-                $"{Connection.Os?.PrettyName}. Next, install an SSH key for root.");
+                _keyLogin ? $"{Connection.Os?.PrettyName}, logged in with the saved SSH key." : $"{Connection.Os?.PrettyName}. Next, install an SSH key for root.");
             SetStatus($"Connected to {host} as root.");
         }
         catch (Exception ex)

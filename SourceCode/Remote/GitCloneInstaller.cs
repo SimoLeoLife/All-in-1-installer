@@ -105,6 +105,13 @@ public static class GitCloneInstaller
         string script = RemoteScript.Prelude + $$"""
             set -o pipefail
             d={{ServerConnection.ShellQuote(target)}}
+            # Octane with AtomCMS: package.json has the Octane step's --base=/client/. Undo only that for the pull;
+            # the Octane step and build.sh put it back.
+            if [ -f "$d/package.json" ] && grep -q -- '--base=' "$d/package.json" &&
+               sed -E 's#("(start|build)": "vite) --base=[^ "]+#\1#' "$d/package.json" | cmp -s - <(git -c safe.directory="$d" -C "$d" show HEAD:package.json 2>/dev/null); then
+              git -c safe.directory="$d" -C "$d" checkout -- package.json
+              echo "  package.json: --base for /client/ undone for the pull (the Octane step sets it again)"
+            fi
             changed=$(git -c safe.directory="$d" -C "$d" status --porcelain --untracked-files=no)
             if [ -n "$changed" ]; then
               echo "$changed" | head -20

@@ -11,7 +11,8 @@ public sealed record OctaneState(
     bool SiteServesOctane,
     bool GamedataPresent,
     string? UiCameraUrl,
-    string? EmulatorImager)
+    string? EmulatorImager,
+    string? ConfigBaseUrl)
 {
     public string? ExpectedSocketUrl => Site is null ? null : OctaneInstaller.SocketUrl(Site);
 
@@ -19,7 +20,11 @@ public sealed record OctaneState(
     public bool CameraConfigured => Site is not null && UiCameraUrl == $"{Site.Url}/gamedata/camera" &&
                                     EmulatorImager == EmulatorInstaller.ImagerSettingsLine(Site.Url);
 
-    public bool IsComplete => Site is not null && Built && SiteServesOctane && GamedataPresent && ConfiguredSocketUrl == ExpectedSocketUrl && CameraConfigured;
+    /// <summary>client-mode.json follows the site layout: /configuration/, or /client/configuration/ with AtomCMS.</summary>
+    public bool LayoutConfigured => Site is not null && ConfigBaseUrl == $"{Site.ClientUrl}configuration/";
+
+    public bool IsComplete => Site is not null && Built && SiteServesOctane && GamedataPresent && ConfiguredSocketUrl == ExpectedSocketUrl &&
+                              CameraConfigured && LayoutConfigured;
 }
 
 /// <summary>Configures, builds and publishes the Octane client.</summary>
@@ -39,6 +44,14 @@ public static class OctaneInstaller
     private const string Environment =
         "export PATH=/usr/sbin:/usr/bin:/sbin:/bin COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1 NO_COLOR=1 FORCE_COLOR=0 HOME=/root";
 
+    /// <summary>
+    /// Sets or removes vite's --base in the start and build scripts of package.json (the AtomCMS guide's change),
+    /// e.g. "vite build" becomes "vite --base=/client/ build". The Octane clone step undoes it before a git pull.
+    /// </summary>
+    public static string PackageBaseCommand(WebAccessSettings site) =>
+        "sed -i -E -e 's#(\"(start|build)\": \"vite) --base=[^ \"]+#\\1#'" +
+        (site.AtomCms ? $" -e 's#(\"(start|build)\": \"vite)( |\")#\\1 --base={site.ClientPath}\\3#'" : "") + " package.json";
+
     public static string SocketUrl(WebAccessSettings site) => $"{(site.Https ? "wss" : "ws")}://{site.Url[(site.Url.IndexOf("://", StringComparison.Ordinal) + 3)..]}/ws";
 
     public static async Task<OctaneState> InspectAsync(ServerConnection connection, CancellationToken token = default)
@@ -51,7 +64,8 @@ public static class OctaneInstaller
             echo "node=$(node -v 2>/dev/null)"
             echo "socket=$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["socket.url"] || "") } catch { }' {{ConfigurationDirectory}}/renderer-config.json 2>/dev/null)"
             echo "built=$([ -f {{Dist}}/index.html ] && echo yes)"
-            echo "site=$(grep -qs 'root {{Dist}};' {{WebAccessInstaller.SiteFile}} && echo yes)"
+            echo "site=$(grep -Eqs '(root|alias) {{Dist}}/?;' {{WebAccessInstaller.SiteFile}} && echo yes)"
+            echo "configbase=$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["plainConfigBaseUrl"] || "") } catch { }' {{ConfigurationDirectory}}/client-mode.json 2>/dev/null)"
             echo "gamedata=$([ -d {{Gamedata}}/config ] && echo yes)"
             echo "uicamera=$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))["camera.url"] || "") } catch { }' {{ConfigurationDirectory}}/ui-config.json 2>/dev/null)"
             db=$(grep -sE '^db.database=' {{EmulatorInstaller.Directory}}/config.ini | cut -d= -f2)
@@ -60,12 +74,10 @@ public static class OctaneInstaller
         CommandResult result = await connection.RunAsRootAsync(script, token);
         var values = new ScriptValues(result.Output);
 
-        WebAccessSettings? site = values["conf_ADDRESS"] is { } address
-            ? new WebAccessSettings(address, values["conf_SCHEME"] == "https", values.Yes("conf_CLOUDFLARE"))
-            : null;
+        WebAccessSettings? site = WebAccessSettings.FromHotelEnv(values);
         return new OctaneState(site, values.Yes("octane"), values.Yes("renderer"), values["node"],
             values["socket"], values.Yes("built"), values.Yes("site"), values.Yes("gamedata"),
-            values["uicamera"], values["emuimager"]);
+            values["uicamera"], values["emuimager"], values["configbase"]);
     }
 
     /// <summary>Uses Yarn 4 through Corepack, as package.json pins.</summary>
@@ -97,10 +109,14 @@ public static class OctaneInstaller
             # The emulator's timezone (config.ini) for timezone.settings in a new renderer-config.json.
             tz=$(grep -oE 'serverTimezone=[^&[:space:]]+' {{EmulatorInstaller.Directory}}/config.ini 2>/dev/null | head -1 | cut -d= -f2)
             echo "> {{ConfigurationDirectory}}: {{string.Join(", ", ConfigurationFiles.Select(f => f + ".json"))}}"
-            SITE_URL='{{site.Url}}' SOCKET_URL='{{SocketUrl(site)}}' CONFIG_DIR='{{ConfigurationDirectory}}' GAMEDATA_DIR='{{Gamedata}}' \
+            SITE_URL='{{site.Url}}' CLIENT_URL='{{site.ClientUrl}}' ATOM='{{(site.AtomCms ? "yes" : "")}}' SOCKET_URL='{{SocketUrl(site)}}' CONFIG_DIR='{{ConfigurationDirectory}}' GAMEDATA_DIR='{{Gamedata}}' \
               FILES='{{string.Join(' ', ConfigurationFiles)}}' TIMEZONE="$tz" node - <<'JS'
             {{ConfigureScript}}
             JS
+            echo "> {{Octane}}/package.json: {{(site.AtomCms ? $"vite --base={site.ClientPath} (Octane on {site.ClientPath})" : "vite without --base (Octane on /)")}}"
+            cd {{Octane}}
+            {{PackageBaseCommand(site)}}
+            grep -E '"(start|build)": ' package.json | sed 's/^ */  /'
             # The emulator (group www-data) writes into gamedata: custom badges (c_images/album1584) and edits of
             # config/*.json. Default ACLs keep files copied in later (download tool, WinSCP) writable for it too.
             command -v setfacl >/dev/null 2>&1 || { echo "> Installing acl (setfacl)"; apt_update >/dev/null; apt-get install -y acl >/dev/null; }
@@ -168,7 +184,7 @@ public static class OctaneInstaller
     private const string ConfigureScript = """
         const fs = require('fs');
         const path = require('path');
-        const { SITE_URL: site, SOCKET_URL: socket, CONFIG_DIR: dir, GAMEDATA_DIR: gamedata, TIMEZONE: timezone } = process.env;
+        const { SITE_URL: site, CLIENT_URL: client, ATOM: atom, SOCKET_URL: socket, CONFIG_DIR: dir, GAMEDATA_DIR: gamedata, TIMEZONE: timezone } = process.env;
 
         // Always set: the hotel's URLs. Only in a file created from the .example: the folder layout and modes.
         const urls = {
@@ -181,7 +197,9 @@ public static class OctaneInstaller
                 'furni.asset.icon.url': `${site}/gamedata/icons/%libname%%param%_icon.png`,
                 'badge.asset.group.url': `${site}/gamedata/c_images/groupbadge/badge/%badgedata%`,
                 'badge.asset.grouparts.url': `${site}/gamedata/c_images/groupbadge/badgeparts/badgepart_%part%.png`,
-                'group.badge.url': '%imagerdata%'
+                'group.badge.url': '%imagerdata%',
+                // With AtomCMS the CMS logs in and opens the client with an SSO ticket.
+                ...(atom ? { 'login.screen.enabled': false } : {})
             },
             'ui-config': {
                 'camera.url': `${site}/gamedata/camera`,
@@ -190,7 +208,7 @@ public static class OctaneInstaller
             },
             'client-mode': {
                 'apiBaseUrl': site,
-                'plainConfigBaseUrl': `${site}/configuration/`,
+                'plainConfigBaseUrl': `${client}configuration/`,
                 'plainGamedataBaseUrl': `${site}/gamedata/`
             }
         };
@@ -264,7 +282,7 @@ public static class OctaneInstaller
         """;
 
     /// <summary>Writes build.sh for later rebuilds, then builds.</summary>
-    public static Task BuildAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
+    public static Task BuildAsync(ServerConnection connection, WebAccessSettings site, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
             {{Environment}}
@@ -276,7 +294,10 @@ public static class OctaneInstaller
             set -e
             export PATH=/usr/sbin:/usr/bin:/sbin:/bin COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1
             cd {{Renderer}} && yarn install
-            cd {{Octane}} && yarn install && yarn build
+            cd {{Octane}}
+            # Octane on {{site.ClientPath}}: keeps package.json's --base right after a git pull.
+            {{PackageBaseCommand(site)}}
+            yarn install && yarn build
             BUILD
             chmod 755 {{Octane}}/build.sh
             cd {{Octane}}
@@ -302,13 +323,19 @@ public static class OctaneInstaller
 
             url="{{site.Scheme}}://{{name}}"
             c() { curl -s --noproxy '*' -k --max-time 10 --resolve "{{name}}:{{port}}:127.0.0.1" "$@"; }
-            echo "> $url/ (Octane)"
-            page=$(c "$url/" || true)
-            echo "$page" | grep -q 'configuration/bootstrap.js' || fail "$url/ does not serve Octane's dist/index.html."
+            client="$url{{site.ClientPath}}"
+            echo "> $client (Octane)"
+            # The NGINX reload above finishes in the background: give the new workers a moment.
+            for i in 1 2 3 4 5 6 7 8 9 10; do
+              page=$(c "$client" || true)
+              echo "$page" | grep -q 'configuration/bootstrap.js' && break
+              sleep 1
+            done
+            echo "$page" | grep -q 'configuration/bootstrap.js' || fail "$client does not serve Octane's dist/index.html."
             echo "  index.html OK"
-            echo "> $url/configuration/renderer-config.json"
-            socket=$(c "$url/configuration/renderer-config.json" | grep -oE '"socket.url": *"[^"]*"' || true)
-            [ -n "$socket" ] || fail "$url/configuration/renderer-config.json is not served."
+            echo "> ${client}configuration/renderer-config.json"
+            socket=$(c "${client}configuration/renderer-config.json" | grep -oE '"socket.url": *"[^"]*"' || true)
+            [ -n "$socket" ] || fail "${client}configuration/renderer-config.json is not served."
             echo "  $socket"
             echo "> $url/gamedata/"
             echo "  HTTP $(c -o /dev/null -w '%{http_code}' "$url/gamedata/config/" || true) (403/404 until the assets are copied in)"

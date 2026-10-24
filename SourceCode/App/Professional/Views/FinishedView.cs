@@ -1,5 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
 using AllInOneInstaller.Remote;
@@ -59,6 +61,96 @@ public static class FinishedView
         page.Children.Add(Section($"3. Where everything goes ({OctaneInstaller.Gamedata})", AssetTable()));
         page.Children.Add(Section("4. After uploading", After(site)));
         return page;
+    }
+
+    /// <summary>Last page of the AtomCMS addon: the web installer key, the paths it already has, and admin rights.</summary>
+    public static Control BuildAtomCms(WebAccessSettings? site, string? installationKey, bool installationCompleted,
+        IReadOnlyList<(string Title, StepSummary Result)> steps)
+    {
+        var page = new StackPanel { Spacing = 18 };
+        bool clean = steps.All(s => s.Result is StepSummary.Done or StepSummary.AlreadyInstalled);
+        string url = site?.Url ?? "your hotel";
+        var banner = new ResultBanner();
+        banner.Show(clean ? ResultKind.Success : ResultKind.Warning,
+            clean ? "AtomCMS is installed" : "AtomCMS was not installed",
+            clean
+                ? $"{url} is now AtomCMS; Octane is on {site?.ClientUrl ?? "/client/"} and opens from the CMS after logging in."
+                : "Run the AtomCMS step again when the server is ready (see the step for what is missing).");
+        page.Children.Add(banner);
+        page.Children.Add(StepList(steps));
+
+        var installer = new StackPanel { Spacing = 6 };
+        if (installationCompleted)
+            installer.Children.Add(Text("The web installer is already finished. Change these settings later in the housekeeping (Website settings).", 13));
+        else
+        {
+            installer.Children.Add(Text($"Open {url}: AtomCMS asks for its installation key first. Copy it from here:", 13));
+            installer.Children.Add(installationKey is null
+                ? Code("SELECT installation_key FROM website_installation;")
+                : CopyBox(installationKey));
+            installer.Children.Add(Text("Then go through the settings; the paths for this server are already filled in:", 13));
+        }
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 18, RowSpacing = 4 };
+        (string Key, string Value)[] settings = AtomCmsInstaller.WebsiteSettings("").Where(s => s.Key != "hotel_name").ToArray();
+        for (int i = 0; i < settings.Length; i++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            var key = Text(settings[i].Key, 12.5, "Pro.Muted");
+            Grid.SetRow(key, i);
+            grid.Children.Add(key);
+            var value = Code(settings[i].Value);
+            Grid.SetRow(value, i);
+            Grid.SetColumn(value, 1);
+            grid.Children.Add(value);
+        }
+        installer.Children.Add(grid);
+        page.Children.Add(Section("1. AtomCMS' web installer", installer));
+
+        var admin = new StackPanel { Spacing = 6 };
+        admin.Children.Add(Text($"Register your account on {url}, log out, and give it the highest rank while it is offline (HeidiSQL over the SSH tunnel, database habbo):", 13));
+        admin.Children.Add(Code("UPDATE users SET `rank` = 7 WHERE username = 'YourName';"));
+        admin.Children.Add(Text("The housekeeping is on /housekeeping (rank 6 and up).", 12, "Pro.Subtle"));
+        page.Children.Add(Section("2. Become administrator", admin));
+
+        var later = new StackPanel { Spacing = 6 };
+        later.Children.Add(Text($"Captcha (Cloudflare Turnstile or Google reCAPTCHA): put the keys in {AtomCmsInstaller.Directory}/.env, then turn it on in the housekeeping.", 13));
+        later.Children.Add(Text("Updating AtomCMS (git pull, composer install, migrations, theme) and Octane: run this addon again.", 13));
+        later.Children.Add(Text($"Rebuilding only Octane (for /client): {OctaneInstaller.Octane}/build.sh.", 12, "Pro.Subtle"));
+        page.Children.Add(Section("3. Later", later));
+        return page;
+    }
+
+    /// <summary>The text in large monospace with a Copy button, for pasting it elsewhere.</summary>
+    public static Control CopyBox(string text)
+    {
+        var value = new SelectableTextBlock
+        {
+            Text = text,
+            FontFamily = Mono,
+            FontSize = 18,
+            FontWeight = FontWeight.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center
+        }.Bind(SelectableTextBlock.ForegroundProperty, "Pro.Text");
+        var copy = new Button { Content = "Copy", Padding = new Thickness(18, 8), Classes = { "primary" }, VerticalAlignment = VerticalAlignment.Center };
+        copy.Click += async (_, _) =>
+        {
+            if (TopLevel.GetTopLevel(copy)?.Clipboard is not { } clipboard) return;
+            await clipboard.SetValueAsync(DataFormat.Text, text);
+            copy.Content = "Copied";
+        };
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 14 };
+        row.Children.Add(value);
+        Grid.SetColumn(copy, 1);
+        row.Children.Add(copy);
+        return new Border
+        {
+            Child = row,
+            Padding = new Thickness(16, 10),
+            CornerRadius = new CornerRadius(10),
+            BorderThickness = new Thickness(1),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            MinWidth = 520
+        }.Bind(Border.BackgroundProperty, "Pro.Hover").Bind(Border.BorderBrushProperty, "Pro.CardBorder");
     }
 
     private static Control StepList(IReadOnlyList<(string Title, StepSummary Result)> steps)

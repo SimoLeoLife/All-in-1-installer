@@ -57,9 +57,7 @@ public static class HardenInstaller
         CommandResult result = await connection.RunAsRootAsync(script, token);
         var values = new ScriptValues(result.Output);
 
-        WebAccessSettings? site = values["conf_ADDRESS"] is { } address
-            ? new WebAccessSettings(address, values["conf_SCHEME"] == "https", values.Yes("conf_CLOUDFLARE"))
-            : null;
+        WebAccessSettings? site = WebAccessSettings.FromHotelEnv(values);
         var ports = (values["ssh"] ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Select(p => int.TryParse(p, out int n) ? n : 0).Where(n => n > 0).ToList();
         return new HardenState(site, values.Yes("active"), values.Yes("deny"), ports,

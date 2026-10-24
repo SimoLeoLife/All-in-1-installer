@@ -29,6 +29,89 @@ public static class HotelSite
                 }
         """;
 
+    // Octane on the site itself.
+    private const string OctaneLocations = """
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+
+            location = /index.html {
+                add_header Cache-Control "no-cache" always;
+            }
+
+            location = /.vite/manifest.json {
+                try_files $uri =404;
+                default_type application/json;
+                add_header Cache-Control "no-store" always;
+            }
+
+            # Build output with a hash in the name never changes.
+            location ~* ^/(assets|src/assets)/.+-[a-zA-Z0-9_]+\.(js|css|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|avif|map)$ {
+                try_files $uri =404;
+                expires 1y;
+                add_header Cache-Control "public, immutable" always;
+            }
+
+            # Octane's runtime configuration: always the current version.
+            location /configuration/ {
+                try_files $uri =404;
+                add_header Cache-Control "no-store" always;
+            }
+        """;
+
+    // AtomCMS is the site; Octane is served from /client/ (the CMS opens /client/index.html?sso=...).
+    private const string AtomLocations = $$"""
+            client_max_body_size 20m;
+
+            location / {
+                try_files $uri $uri/ /index.php?$query_string;
+            }
+
+            location ~ \.php$ {
+                include snippets/fastcgi-php.conf;
+                fastcgi_pass unix:{{PhpInstaller.Socket}};
+                fastcgi_param SCRIPT_FILENAME $realpath_root$fastcgi_script_name;
+                fastcgi_hide_header X-Powered-By;
+            }
+
+            location ~ /\.ht {
+                deny all;
+            }
+
+            location = /client {
+                return 301 /client/;
+            }
+
+            location /client/ {
+                alias {{OctaneInstaller.Dist}}/;
+                index index.html;
+            }
+
+            location = /client/index.html {
+                alias {{OctaneInstaller.Dist}}/index.html;
+                add_header Cache-Control "no-cache" always;
+            }
+
+            location = /client/.vite/manifest.json {
+                alias {{OctaneInstaller.Dist}}/.vite/manifest.json;
+                default_type application/json;
+                add_header Cache-Control "no-store" always;
+            }
+
+            # Vite only puts files with a hash in their name in assets/: they never change.
+            location ^~ /client/assets/ {
+                alias {{OctaneInstaller.Dist}}/assets/;
+                expires 1y;
+                add_header Cache-Control "public, immutable" always;
+            }
+
+            # Octane's runtime configuration: always the current version.
+            location ^~ /client/configuration/ {
+                alias {{OctaneInstaller.Dist}}/configuration/;
+                add_header Cache-Control "no-store" always;
+            }
+        """;
+
     /// <summary>@ROOT@ is substituted on the server.</summary>
     public static string Config(WebAccessSettings site)
     {
@@ -44,7 +127,8 @@ public static class HotelSite
         return $$"""
             # The hotel website (written by All-in-1 Installer; the web access and Octane steps rewrite it).
             # Traefik (/opt/traefik) answers on ports 80/443 for {{site.Url}} (and does the TLS) and passes the
-            # site to this server on 127.0.0.1:{{Port}}; /ws and /api go straight to Polaris on 127.0.0.1:{{WebAccessInstaller.PolarisPort}}.
+            # site to this server on 127.0.0.1:{{Port}}; /ws and Polaris' /api go straight to Polaris on 127.0.0.1:{{WebAccessInstaller.PolarisPort}}.
+            # {{(site.AtomCms ? $"AtomCMS ({AtomCmsInstaller.Public}) is the site, Octane is on /client/." : "Octane is the site.")}}
 
             map $http_origin $hotel_cors_origin {
                 default "";
@@ -80,33 +164,7 @@ public static class HotelSite
                 access_log {{LogDirectory}}/access.log;
                 error_log  {{LogDirectory}}/error.log;
 
-                location / {
-                    try_files $uri $uri/ /index.html;
-                }
-
-                location = /index.html {
-                    add_header Cache-Control "no-cache" always;
-                }
-
-                location = /.vite/manifest.json {
-                    try_files $uri =404;
-                    default_type application/json;
-                    add_header Cache-Control "no-store" always;
-                }
-
-                # Build output with a hash in the name never changes.
-                location ~* ^/(assets|src/assets)/.+-[a-zA-Z0-9_]+\.(js|css|woff2?|ttf|otf|eot|svg|png|jpe?g|gif|webp|avif|map)$ {
-                    try_files $uri =404;
-                    expires 1y;
-                    add_header Cache-Control "public, immutable" always;
-                }
-
-                # Octane's runtime configuration: always the current version.
-                location /configuration/ {
-                    try_files $uri =404;
-                    add_header Cache-Control "no-store" always;
-                }
-
+            {{(site.AtomCms ? AtomLocations : OctaneLocations)}}
                 # The hotel's assets (copied in with the All-in-1 download tool) and the camera photos.
                 location /gamedata/ {
                     alias {{OctaneInstaller.Gamedata}}/;
@@ -145,7 +203,9 @@ public static class HotelSite
     /// Also disables other sites on 80/443 and checks 127.0.0.1:85. A null <paramref name="root"/> keeps the
     /// current root.
     /// </summary>
-    public static string WriteScript(WebAccessSettings site, string? root) => $$"""
+    public static string WriteScript(WebAccessSettings site, string? root) => WriteScriptFor(site, site.AtomCms ? AtomCmsInstaller.Public : root);
+
+    private static string WriteScriptFor(WebAccessSettings site, string? root) => $$"""
         [ -d /etc/nginx/sites-available ] || fail "NGINX is not installed with sites-available. Run the NGINX step first."
         if [ -f {{File}} ] && ! grep -q 'All-in-1 Installer' {{File}}; then
           cp {{File}} "{{File}}.bak-$(date +%Y%m%d-%H%M%S)"
@@ -189,6 +249,6 @@ public static class HotelSite
         sleep 1
         code=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' http://127.0.0.1:{{Port}}/ || true)
         echo "  http://127.0.0.1:{{Port}}/ answers $code"
-        [ "$code" = 200 ] || [ "$code" = 403 ] || fail "NGINX does not answer on 127.0.0.1:{{Port}} (HTTP '$code')."
+        case "$code" in 200|302|403) ;; *) fail "NGINX does not answer on 127.0.0.1:{{Port}} (HTTP '$code')." ;; esac
         """;
 }

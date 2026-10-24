@@ -55,6 +55,17 @@ public static class ClientConfiguration
         return keys;
     }
 
+    /// <summary>Private keys saved by the SSH key step (a key file with its .pub next to it), newest first.</summary>
+    public static List<string> SavedPrivateKeys(string host)
+    {
+        string directory = Path.Combine(Directory, "keys", SafeName(host));
+        if (!System.IO.Directory.Exists(directory)) return [];
+        return System.IO.Directory.GetFiles(directory)
+            .Where(path => Path.GetExtension(path) is not (".pub" or ".ppk") && File.Exists(path + ".pub"))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .ToList();
+    }
+
     public static string DatabaseCredentialsPath(string host)
     {
         string directory = Path.Combine(Directory, "database", SafeName(host));

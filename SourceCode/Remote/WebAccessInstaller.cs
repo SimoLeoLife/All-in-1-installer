@@ -1,12 +1,21 @@
 namespace AllInOneInstaller.Remote;
 
-/// <summary>How the hotel is reached from the internet.</summary>
-public sealed record WebAccessSettings(string Address, bool Https, bool Cloudflare)
+/// <summary>How the hotel is reached from the internet. With AtomCMS the CMS is the site and Octane moves to /client.</summary>
+public sealed record WebAccessSettings(string Address, bool Https, bool Cloudflare, bool AtomCms = false)
 {
     public string Scheme => Https ? "https" : "http";
+    /// <summary>Where Octane is served: "/" or "/client/".</summary>
+    public string ClientPath => AtomCms ? "/client/" : "/";
+    public string ClientUrl => Url + ClientPath;
     public string Url => $"{Scheme}://{(Address.Contains(':') ? $"[{Address}]" : Address)}";
     /// <summary>Traefik then answers for every host name.</summary>
     public bool IsIpAddress => System.Net.IPAddress.TryParse(Address, out _);
+
+    /// <summary>The settings in /opt/traefik/hotel.env, as printed with a conf_ prefix; null before the web access step.</summary>
+    public static WebAccessSettings? FromHotelEnv(ScriptValues values) =>
+        values["conf_ADDRESS"] is { } address
+            ? new WebAccessSettings(address, values["conf_SCHEME"] == "https", values.Yes("conf_CLOUDFLARE"), values["conf_CMS"] == "atom")
+            : null;
 }
 
 /// <summary>Docker, Traefik and NGINX state before the step runs.</summary>
@@ -71,9 +80,7 @@ public static class WebAccessInstaller
         CommandResult result = await connection.RunAsRootAsync(script, token);
         var values = new ScriptValues(result.Output);
 
-        WebAccessSettings? configured = values["conf_ADDRESS"] is { } address
-            ? new WebAccessSettings(address, values["conf_SCHEME"] == "https", values.Yes("conf_CLOUDFLARE"))
-            : null;
+        WebAccessSettings? configured = WebAccessSettings.FromHotelEnv(values);
         // "5:29.9.2-1~ubuntu.24.04~noble" -> "29.9.2"
         string? docker = values["docker"] is { } package ? package[(package.IndexOf(':') + 1)..].Split('-')[0] : null;
         return new WebAccessState(docker, values.Yes("dockerorg"),
@@ -153,10 +160,6 @@ public static class WebAccessInstaller
     public static Task ConfigureTraefikAsync(ServerConnection connection, WebAccessSettings settings, Action<string> log,
         CancellationToken token = default)
     {
-        string entryPoint = settings.Https ? "websecure" : "web";
-        string host = settings.IsIpAddress ? "" : $"Host(`{settings.Address}`) && ";
-        string siteRule = settings.IsIpAddress ? "PathPrefix(`/`)" : $"Host(`{settings.Address}`)";
-        string tls = settings.Https ? "\n      tls:\n        certResolver: letsencrypt" : "";
         string redirect = settings.Https ? """
 
                 http:
@@ -213,31 +216,7 @@ public static class WebAccessInstaller
             EOF
             sed -i "s#\[TRUSTED\]#[$trusted]#" "$t/traefik.yml"
 
-            echo "> $t/dynamic/hotel.yml: {{settings.Url}}/ws and /api to Polaris, the rest to NGINX"
-            cat > "$t/dynamic/hotel.yml" <<'EOF'
-            # The hotel's routes (written by All-in-1 Installer).
-            http:
-              routers:
-                polaris:
-                  rule: "{{host}}(PathPrefix(`/ws`) || PathPrefix(`/api`))"
-                  entryPoints: [{{entryPoint}}]
-                  service: polaris
-                  priority: 100{{tls}}
-                hotel:
-                  rule: "{{siteRule}}"
-                  entryPoints: [{{entryPoint}}]
-                  service: nginx
-                  priority: 1{{tls}}
-              services:
-                polaris:
-                  loadBalancer:
-                    servers:
-                      - url: "http://127.0.0.1:{{PolarisPort}}"
-                nginx:
-                  loadBalancer:
-                    servers:
-                      - url: "http://127.0.0.1:{{NginxPort}}"
-            EOF
+            {{RoutesScript(settings)}}
 
             # Host network: Traefik reaches NGINX and Polaris on 127.0.0.1, and Polaris sees 127.0.0.1 as the
             # (trusted) proxy that sets X-Forwarded-For.
@@ -254,11 +233,6 @@ public static class WebAccessInstaller
                   - ./traefik.yml:/etc/traefik/traefik.yml:ro
                   - ./dynamic:/etc/traefik/dynamic:ro
                   - ./letsencrypt:/letsencrypt
-            EOF
-            cat > "$t/hotel.env" <<'EOF'
-            ADDRESS={{settings.Address}}
-            SCHEME={{settings.Scheme}}
-            CLOUDFLARE={{(settings.Cloudflare ? "yes" : "no")}}
             EOF
 
             echo "> docker compose pull (traefik:v3)"
@@ -286,6 +260,69 @@ public static class WebAccessInstaller
             ufw_allow 80/tcp 443/tcp
             """;
         return RemoteScript.RunAsync(connection, script, log, "Setting up Traefik failed", token);
+    }
+
+    /// <summary>Polaris' own /api paths. With AtomCMS only these go to Polaris: the CMS has an /api of its own.</summary>
+    public static readonly string[] PolarisApiPaths =
+        ["auth", "authx", "badges", "cms", "emustats", "health", "housekeeping", "maintenance", "public", "wired"];
+
+    /// <summary>Writes dynamic/hotel.yml and hotel.env in $t; Traefik picks up the routes without a restart.</summary>
+    private static string RoutesScript(WebAccessSettings settings)
+    {
+        string entryPoint = settings.Https ? "websecure" : "web";
+        string host = settings.IsIpAddress ? "" : $"Host(`{settings.Address}`) && ";
+        string siteRule = settings.IsIpAddress ? "PathPrefix(`/`)" : $"Host(`{settings.Address}`)";
+        string tls = settings.Https ? "\n      tls:\n        certResolver: letsencrypt" : "";
+        string polaris = settings.AtomCms
+            ? $"PathPrefix(`/ws`) || PathPrefix(`/nitro-sec`) || PathRegexp(`^/api/({string.Join('|', PolarisApiPaths)})(/|$)`)"
+            : "PathPrefix(`/ws`) || PathPrefix(`/api`)";
+        string description = settings.AtomCms ? "/ws and Polaris' /api paths to Polaris, the rest (AtomCMS, /client) to NGINX" : "/ws and /api to Polaris, the rest to NGINX";
+        return $$"""
+            echo "> $t/dynamic/hotel.yml: {{settings.Url}}{{description}}"
+            cat > "$t/dynamic/hotel.yml" <<'EOF'
+            # The hotel's routes (written by All-in-1 Installer).
+            http:
+              routers:
+                polaris:
+                  rule: "{{host}}({{polaris}})"
+                  entryPoints: [{{entryPoint}}]
+                  service: polaris
+                  priority: 100{{tls}}
+                hotel:
+                  rule: "{{siteRule}}"
+                  entryPoints: [{{entryPoint}}]
+                  service: nginx
+                  priority: 1{{tls}}
+              services:
+                polaris:
+                  loadBalancer:
+                    servers:
+                      - url: "http://127.0.0.1:{{PolarisPort}}"
+                nginx:
+                  loadBalancer:
+                    servers:
+                      - url: "http://127.0.0.1:{{NginxPort}}"
+            EOF
+
+            cat > "$t/hotel.env" <<'EOF'
+            ADDRESS={{settings.Address}}
+            SCHEME={{settings.Scheme}}
+            CLOUDFLARE={{(settings.Cloudflare ? "yes" : "no")}}
+            CMS={{(settings.AtomCms ? "atom" : "none")}}
+            EOF
+            """;
+    }
+
+    /// <summary>Rewrites only the routes (for the AtomCMS addon); Traefik itself keeps running.</summary>
+    public static Task ConfigureRoutesAsync(ServerConnection connection, WebAccessSettings settings, Action<string> log,
+        CancellationToken token = default)
+    {
+        string script = RemoteScript.Prelude + $$"""
+            t={{TraefikDirectory}}
+            [ -d "$t/dynamic" ] || fail "Traefik is not set up in $t. Run the Web access step first."
+            {{RoutesScript(settings)}}
+            """;
+        return RemoteScript.RunAsync(connection, script, log, "Changing the Traefik routes failed", token);
     }
 
     /// <summary>
@@ -349,7 +386,8 @@ public static class WebAccessInstaller
             echo "> $url/ (NGINX on port {{NginxPort}})"
             code=$(c $k -o /dev/null -w '%{http_code}' "$url/" || true)
             echo "  HTTP $code"
-            [ "$code" = 200 ] || [ "$code" = 403 ] || fail "Traefik does not pass $url/ to NGINX (HTTP '$code'). See: docker logs traefik"
+            # 302: AtomCMS sends a new install to its installer.
+            case "$code" in 200|302|403) ;; *) fail "Traefik does not pass $url/ to NGINX (HTTP '$code'). See: docker logs traefik" ;; esac
             if [ "{{settings.Scheme}}" = https ]; then
               code=$(c -o /dev/null -w '%{http_code}' "http://{{name}}/" || true)
               case "$code" in

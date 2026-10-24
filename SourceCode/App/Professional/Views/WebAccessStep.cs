@@ -143,6 +143,8 @@ public sealed partial class WebAccessStep : InstallStep
         // Traefik takes ports 80/443; NGINX moves to 85.
         Run.Log("> Checking the server ...");
         WebAccessState state = await Task.Run(() => WebAccessInstaller.InspectAsync(connection));
+        // The AtomCMS addon stays in place (CMS on the site, Octane on /client).
+        settings = settings with { AtomCms = state.Configured?.AtomCms == true };
         Run.Log($"  {settings.Url}, Cloudflare: {(settings.Cloudflare ? "yes" : "no")}");
         Run.Log(state.DockerVersion is null ? "  Docker Engine is not installed yet." : $"  Docker {state.DockerVersion} is installed.");
         foreach ((string port, string? owner80) in new[] { ("80", state.Port80Process), ("443", state.Port443Process) })

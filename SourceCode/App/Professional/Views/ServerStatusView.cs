@@ -214,14 +214,14 @@ public sealed class ServerStatusView : StackPanel
 
     // ---------------------------------------------------------------- building blocks
 
-    private static TextBlock Big() => Text("…", 24, weight: FontWeight.SemiBold);
-    private static TextBlock Small() => Text("", 12, "Pro.Muted");
+    internal static TextBlock Big() => Text("…", 24, weight: FontWeight.SemiBold);
+    internal static TextBlock Small() => Text("", 12, "Pro.Muted");
 
-    private static SelectableTextBlock Mono(string text) =>
+    internal static SelectableTextBlock Mono(string text) =>
         new SelectableTextBlock { Text = text, FontFamily = new FontFamily("Cascadia Mono, Consolas, DejaVu Sans Mono, monospace"), FontSize = 12.5 }
             .Bind(SelectableTextBlock.ForegroundProperty, "Pro.Text");
 
-    private static Control Tile(string title, string icon, Color color, TextBlock value, TextBlock detail)
+    internal static Control Tile(string title, string icon, Color color, TextBlock value, TextBlock detail)
     {
         var head = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         var glyph = Icon(icon, 15);
@@ -236,7 +236,7 @@ public sealed class ServerStatusView : StackPanel
         return Box(panel, new Thickness(0, 0, 10, 0));
     }
 
-    private static Control Panel(string title, Control? side, params Control[] content)
+    internal static Control Panel(string title, Control? side, params Control[] content)
     {
         var head = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         head.Children.Add(Text(title, 13, weight: FontWeight.SemiBold));
@@ -251,7 +251,7 @@ public sealed class ServerStatusView : StackPanel
         return Box(panel, default);
     }
 
-    private static Border Box(Control child, Thickness margin) =>
+    internal static Border Box(Control child, Thickness margin) =>
         new Border
         {
             Child = child,
@@ -261,7 +261,7 @@ public sealed class ServerStatusView : StackPanel
             BorderThickness = new Thickness(1)
         }.Bind(Border.BorderBrushProperty, "Pro.CardBorder");
 
-    private static Control Legend(params (string Name, Color Color)[] items)
+    internal static Control Legend(params (string Name, Color Color)[] items)
     {
         var legend = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
         foreach ((string name, Color color) in items)
@@ -274,9 +274,10 @@ public sealed class ServerStatusView : StackPanel
         return legend;
     }
 
-    private static Control Bar(double percent)
+    /// <summary>A bar, green / orange / red by how full it is, or in <paramref name="fixedColor"/> for shares.</summary>
+    internal static Control Bar(double percent, Color? fixedColor = null)
     {
-        Color color = percent >= 90 ? Color.Parse("#DC2626") : percent >= 75 ? Color.Parse("#D97706") : Color.Parse("#16A34A");
+        Color color = fixedColor ?? (percent >= 90 ? Color.Parse("#DC2626") : percent >= 75 ? Color.Parse("#D97706") : Color.Parse("#16A34A"));
         var track = new Grid { Height = 8, ColumnDefinitions = new ColumnDefinitions($"{Math.Max(percent, 0.5):0.##}*,{Math.Max(100 - percent, 0.5):0.##}*") };
         track.Children.Add(new Border { Background = Solid(color), CornerRadius = new CornerRadius(4, 0, 0, 4) });
         var outer = new Border { CornerRadius = new CornerRadius(4), ClipToBounds = true, Child = track };
@@ -292,13 +293,13 @@ public sealed class ServerStatusView : StackPanel
         : bytesPerSecond >= 1024 ? $"{bytesPerSecond / 1024:0.0} KB/s"
         : $"{bytesPerSecond:0} B/s";
 
-    private static string Bytes(long bytes) =>
+    internal static string Bytes(long bytes) =>
         bytes >= 1L << 40 ? $"{bytes / (double)(1L << 40):0.0} TB"
         : bytes >= 1L << 30 ? $"{bytes / (double)(1L << 30):0.0} GB"
         : bytes >= 1L << 20 ? $"{bytes / (double)(1L << 20):0} MB"
         : $"{bytes / 1024.0:0} KB";
 
-    private static string Uptime(long seconds)
+    internal static string Uptime(long seconds)
     {
         var t = TimeSpan.FromSeconds(seconds);
         return t.TotalDays >= 1 ? $"{(int)t.TotalDays}d {t.Hours}h {t.Minutes}m" : t.TotalHours >= 1 ? $"{t.Hours}h {t.Minutes}m" : $"{t.Minutes}m";

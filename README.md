@@ -677,6 +677,7 @@ the server address and the SSH key's password, then root with the saved key.
 | Tool | What it does |
 |---|---|
 | **Server status** | opens a page with only the live dashboard (**Back to the tools** at the bottom, or click **Tools** in the sidebar), refreshed every 2 seconds while it is on screen: CPU (with load and cores), memory (and swap), network in/out with a graph that scales between B/s, KB/s and MB/s, uptime, emulator running and players online, disks with how full they are, the users logged in on the server (`who`), and the git branch, commit, date and last change of the emulator, Octane, Octane-Renderer (and AtomCMS), with the emulator's JAR version and the Octane / Renderer package versions. Everything is read from `/proc` in one short command per sample; nothing is installed on the server |
+| **Emulator & wired** | a live page about the emulator itself, without changing it: its CPU (% of one core and of the server), JVM memory against `-Xmx`, threads and uptime; the CPU of every wired thread (the coordinator that ticks every 50 ms, shards 0–5 that run the rooms' wired, and the heavy-rooms worker); where the emulator's CPU goes per thread group (wired, game logic, game connections, database, garbage collector, JIT, logging, RCON); and the rooms in the log's `Slow wired task: shard=, room=, took=ms` and "wired tasks waiting" warnings since the last start, with room names, slowest and total time, and the latest warnings. CPU comes from `/proc/<pid>/task/*/stat`; the full thread names from `jcmd Thread.print`, read only when new threads appear (a thread dump briefly pauses the JVM) |
 | **Restart emulator** | `systemctl restart emulator` and waits until Polaris has loaded (asks first: everyone is disconnected) |
 | **Restart MariaDB** | restarts MariaDB and waits until it answers |
 | **Restart NGINX** | `nginx -t` first (a broken configuration is not restarted), then PHP-FPM 8.5 and NGINX; checks 127.0.0.1:85 |
@@ -697,6 +698,10 @@ password or a damaged file changes nothing.
 ![Server status](docs/screenshots/server-status.png)
 
 ![Server status: disks, users and versions](docs/screenshots/server-status-versions.png)
+
+![Emulator & wired](docs/screenshots/emulator-wired.png)
+
+![Emulator & wired: slow wired rooms](docs/screenshots/emulator-wired-rooms.png)
 
 ![Restart all](docs/screenshots/tools-restart-all.png)
 
@@ -743,7 +748,8 @@ SourceCode/
   App/Professional/Views/AtomCmsStep.cs   AtomCMS addon page
   App/Professional/Views/ToolsView.cs     Tools page: server tools and the settings backup
   App/Professional/Views/ServerStatusView.cs  Live server dashboard (Server status)
-  App/Professional/Views/LineChart.cs     Rolling line graph used by the dashboard
+  App/Professional/Views/LineChart.cs     Rolling line graph used by the dashboards
+  App/Professional/Views/EmulatorMonitorView.cs  Live emulator and wired dashboard (Emulator & wired)
   App/Professional/Views/PasswordDialog.cs  Password question (settings backup)
   App/Professional/Views/FinishedView.cs  Completed pages: summary, WinSCP and where the assets go; AtomCMS' web installer
   App/Professional/Views/RunPanel.cs      Progress, check list, result and live log of an install step
@@ -770,5 +776,6 @@ SourceCode/
   Remote/AtomCmsInstaller.cs              AtomCMS: .env, composer, migrations and settings, theme build, tests
   Remote/ServerTools.cs                   Restarts, database backup / import, system and emulator updates
   Remote/ServerStatus.cs                  Samples CPU, memory, network, disks, users and the git versions
+  Remote/EmulatorMonitor.cs               Emulator threads (CPU per thread, jcmd names) and slow-wired log warnings
   Remote/RemoteScript.cs                  Runs an install script as root with live output
 ```

@@ -57,7 +57,8 @@ public sealed class ToolsView
         page.Children.Add(Text("Server tools", 15, weight: FontWeight.SemiBold));
         page.Children.Add(_hint);
         page.Children.Add(Section("Status",
-            Tool("Server status", "Live CPU, memory, network, disks, users, versions", Icons.Info, ShowStatusAsync)));
+            Tool("Server status", "Live CPU, memory, network, disks, users, versions", Icons.Info, ShowStatusAsync),
+            Tool("Emulator & wired", "CPU per wired thread and thread group, rooms with slow wired", Icons.Cog, ShowEmulatorMonitorAsync)));
         page.Children.Add(Section("Services",
             Tool("Restart emulator", "Disconnects everyone in the hotel", Icons.History, RestartEmulatorAsync),
             Tool("Restart MariaDB", "The emulator reconnects by itself", Icons.Database, RestartMariaDbAsync),
@@ -270,30 +271,35 @@ public sealed class ToolsView
 
     // ---------------------------------------------------------------- status
 
-    // Its own page: the dashboard samples while it is on screen, and stops when the page is left.
-    private Control? _statusPage;
+    /// <summary>The live dashboards, each on its own page.</summary>
+    public enum Monitor { Server, Emulator }
 
-    /// <summary>Server status was clicked: the window shows <see cref="StatusPage"/> instead of the tiles.</summary>
-    public event Action? StatusRequested;
-    /// <summary>The Back button of the status page.</summary>
+    // Built once; a dashboard samples while it is on screen and stops when its page is left.
+    private readonly Dictionary<Monitor, Control> _monitorPages = [];
+
+    /// <summary>A dashboard was clicked: the window shows <see cref="MonitorPage"/> instead of the tiles.</summary>
+    public event Action<Monitor>? MonitorRequested;
+    /// <summary>The Back button of a dashboard page.</summary>
     public event Action? BackRequested;
 
-    public Control StatusPage => _statusPage ??= BuildStatusPage();
-
-    private Control BuildStatusPage()
+    public Control MonitorPage(Monitor monitor)
     {
+        if (_monitorPages.TryGetValue(monitor, out Control? page)) return page;
         var back = new Button { Content = "Back to the tools", Padding = new Thickness(18, 9), Classes = { "secondary" }, HorizontalAlignment = HorizontalAlignment.Right };
         back.Click += (_, _) => BackRequested?.Invoke();
         var panel = new StackPanel { Spacing = 16 };
-        panel.Children.Add(new ServerStatusView(_connection));
+        panel.Children.Add(monitor == Monitor.Server ? new ServerStatusView(_connection) : new EmulatorMonitorView(_connection));
         panel.Children.Add(back);
-        return Card(panel, new Thickness(24, 20));
+        return _monitorPages[monitor] = Card(panel, new Thickness(24, 20));
     }
 
-    private Task ShowStatusAsync(Window owner, ServerConnection connection)
+    private Task ShowStatusAsync(Window owner, ServerConnection connection) => ShowMonitor(Monitor.Server);
+    private Task ShowEmulatorMonitorAsync(Window owner, ServerConnection connection) => ShowMonitor(Monitor.Emulator);
+
+    private Task ShowMonitor(Monitor monitor)
     {
         _run = null;
-        StatusRequested?.Invoke();
+        MonitorRequested?.Invoke(monitor);
         return Task.CompletedTask;
     }
 

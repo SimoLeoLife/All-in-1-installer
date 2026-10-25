@@ -803,6 +803,33 @@ folders in it: there is no way above it.
 - Uploads go as one tar stream over the SSH connection (like Deploy Assets), downloads over SFTP; the progress and
   speed are shown under the panes.
 
+### SQL Editor
+
+A database client in the style of HeidiSQL, inside the installer. It logs in like the other addons (root with your
+SSH key) and then reaches MariaDB through that SSH session: a tunnel from a free port on `127.0.0.1` of this computer
+to `127.0.0.1:3306` on the server, so the MariaDB port does not have to be open (the Harden step closes it).
+
+It logs in to MariaDB with the root account from `configuration/database/<server>/mariadb.txt` (written when this
+computer installed MariaDB). Without that file, or when MariaDB refuses the password, it asks for a user, password and
+port; **Log in to MariaDB** asks again.
+
+- **Left:** the databases; open one to see its tables and views with their size. The hotel database is opened first.
+- **Data:** the rows of the selected table, 1000 at a time (**Previous** / **Next**). Type a `WHERE` condition in the
+  filter (`id > 100 AND username LIKE 'a%'`) and press Enter. Clicking a column header sorts the whole table on the
+  server. In a table with a primary key, **double-click a cell** to change it (Enter saves at once, Esc cancels);
+  right-click for **Set to NULL**, copy the value or the rows, and **Delete selected rows** (asks first). Tables
+  without a primary key and views are read-only.
+- **Structure:** the columns (`SHOW FULL COLUMNS`) and the `CREATE TABLE` statement.
+- **Query:** an editor for SQL. **F9** or **Ctrl+Enter** runs the selected text, or everything when nothing is
+  selected. Statements run one by one in the database chosen above the editor (`USE` changes it), like the mariadb
+  client: `DELIMITER` works for procedures and triggers, and the first error stops the script and selects its line.
+  Every result set gets its own tab (at most 10,000 rows; add a `LIMIT` for others), and **Messages** shows how many
+  statements ran and how many rows they changed. **Stop** cancels a running query on the server (`KILL QUERY`).
+  **Open .sql** / **Save .sql** load and save the editor; **Export CSV** saves a result (or the table data) as UTF-8 CSV.
+
+`NULL` is shown as `(NULL)`, binary values as hex. Changes are made at once (autocommit), so make a backup first with
+**Tools → Create full database backup** before bigger changes. Big dumps go through **Tools → Import full database**.
+
 ## Settings
 
 **Settings** (sidebar, under GENERAL):
@@ -845,6 +872,7 @@ the server address and the SSH key's password, then root with the saved key.
 | **Disable firewall** | `ufw disable` (asks first: every port is reachable again, also the emulator's 3000 and 2096). The rules are kept, so Enable firewall switches the same rules on again; for testing a connection problem |
 | **Create full database backup** | `mariadb-dump --single-transaction --routines --triggers --events` of the hotel database into `/var/backups/all-in-1/<db>-<time>.sql.gz` (root only; the newest 10 are kept), then downloads it over SFTP to a file you choose (owner-only on Linux/macOS) |
 | **Import full database** | uploads a `.sql` or `.sql.gz`, makes a safety backup (`<db>-before-import-<time>.sql.gz`), stops the emulator, recreates the database with its character set and imports (database names in `CREATE DATABASE` / `USE` lines become the hotel's), clears AtomCMS' cache, and starts the emulator, which updates the database to its version. A file that is not a SQL dump is refused before anything changes |
+| **Recover SQL password** | gives MariaDB's root a new random 32-character password (asks first) and saves it in `configuration/database/<server>/mariadb.txt`; a changed file is kept as `mariadb.txt.bak-<time>`. Changes `root@localhost` (its socket login stays) and `root@'%'` when it exists. When root cannot log in through the socket any more, MariaDB is restarted for a moment with `--skip-grant-tables --skip-networking` to change it and then started normally. Then it tests the new password over 127.0.0.1 and the socket. Without a saved file, the CMS and emulator accounts are read from AtomCMS' `.env` and the emulator's `config.ini`, so the new file is complete. The emulator and AtomCMS use their own accounts and are not affected |
 | **Update system** | `apt-get update`, `upgrade` and `dist-upgrade` (changed configuration files are kept); says when a reboot is needed |
 | **Update emulator** | `git pull` in `/var/www/emulator` and the missing files of its `Assets/` copied into gamedata (see Deploy Assets → Images); when there are new commits: `build.sh` and a restart. The start script runs the newest `target/*-jar-with-dependencies.jar`, so a new version number is picked up by itself; the result shows old → new version. No new commits: nothing is rebuilt or restarted |
 | **Update Octane** | `git pull` of Octane-Renderer and Octane, then in both `rm -rf node_modules yarn.lock` and `yarn install`, then the configuration for the site (keeps AtomCMS' `/client` layout), `yarn build` and a test. The next pull puts the repository's `yarn.lock` back first |
@@ -916,6 +944,8 @@ SourceCode/
   App/Professional/Views/EmulatorAssetsStep.cs  Deploy Assets page: Polaris' images and group badge parts into gamedata
   App/Professional/Views/AssetExplorerView.cs   Asset Explorer: two panes (this computer, gamedata), keys, preview, transfers
   App/Professional/Views/NameDialog.cs    Asks for a file or folder name (rename, new folder)
+  App/Professional/Views/SqlEditorView.cs SQL Editor: database tree, table data (edit, filter, pages), structure, query editor
+  App/Professional/Views/DatabaseLoginDialog.cs  MariaDB user, password and port for the SQL Editor
   App/Professional/Views/ToolsView.cs     Tools page: server tools and the settings backup
   App/Professional/Views/TerminalView.cs  SSH terminal page (toolbar, terminal, ssh command)
   App/Professional/Views/SettingsView.cs  Settings page: default server and key, importing SSH keys, downloader path
@@ -953,6 +983,8 @@ SourceCode/
   Remote/UiTextsInstaller.cs              Installs UITexts_<language>.jsonc.example as gamedata/config/UITexts.jsonc
   Remote/EmulatorAssetsInstaller.cs       Polaris' / the installer's Assets (images, hotel view, badge parts) into gamedata, missing files only
   Remote/GamedataFiles.cs                 Asset Explorer server side: list, upload (rights), download, rename, delete, locked to gamedata
+  Remote/SqlSession.cs                    SQL Editor: SSH tunnel to MariaDB (MySqlConnector), tables, data, edits, scripts
+  Remote/SqlScript.cs                     Splits a script into statements like the mariadb client (quotes, comments, DELIMITER)
   Remote/ServerTools.cs                   Restarts, database backup / import, system and emulator updates
   Remote/ServerStatus.cs                  Samples CPU, memory, network, disks, users and the git versions
   Remote/EmulatorMonitor.cs               Emulator threads (CPU per thread, jcmd names) and slow-wired log warnings

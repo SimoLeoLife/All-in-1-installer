@@ -9,9 +9,11 @@
       "All-in-1 Installer/1.0.0": {
         "dependencies": {
           "Avalonia": "12.0.3",
+          "Avalonia.Controls.DataGrid": "12.0.0",
           "Avalonia.Desktop": "12.0.3",
           "Avalonia.Fonts.Inter": "12.0.3",
           "Avalonia.Themes.Fluent": "12.0.3",
+          "MySqlConnector": "2.6.2",
           "SSH.NET": "2026.0.0"
         },
         "runtime": {
@@ -100,6 +102,18 @@
             "assetType": "native",
             "fileVersion": "2.1.25606.0",
             "localPath": "runtimes/win-x86/native/av_libglesv2.dll"
+          }
+        }
+      },
+      "Avalonia.Controls.DataGrid/12.0.0": {
+        "dependencies": {
+          "Avalonia": "12.0.3"
+        },
+        "runtime": {
+          "lib/net10.0/Avalonia.Controls.DataGrid.dll": {
+            "assemblyVersion": "12.0.0.0",
+            "fileVersion": "12.0.0.0",
+            "localPath": "Avalonia.Controls.DataGrid.dll"
           }
         }
       },
@@ -412,6 +426,15 @@
           }
         }
       },
+      "MySqlConnector/2.6.2": {
+        "runtime": {
+          "lib/net10.0/MySqlConnector.dll": {
+            "assemblyVersion": "2.0.0.0",
+            "fileVersion": "2.6.2.0",
+            "localPath": "MySqlConnector.dll"
+          }
+        }
+      },
       "SkiaSharp/3.119.4-preview.1.1": {
         "dependencies": {
           "SkiaSharp.NativeAssets.Win32": "3.119.4-preview.1.1",
@@ -600,6 +623,13 @@
       "path": "avalonia.angle.windows.natives/2.1.25547.20250602",
       "hashPath": "avalonia.angle.windows.natives.2.1.25547.20250602.nupkg.sha512"
     },
+    "Avalonia.Controls.DataGrid/12.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-pQ9NiviIoxbZ7fiD/KTdoEHRgdKibKtx8Low3nTrU6ZbvULtesuB65aLL/umjibsGMhzPOveqs/om98QAA5FMg==",
+      "path": "avalonia.controls.datagrid/12.0.0",
+      "hashPath": "avalonia.controls.datagrid.12.0.0.nupkg.sha512"
+    },
     "Avalonia.Desktop/12.0.3": {
       "type": "package",
       "serviceable": true,
@@ -718,6 +748,13 @@
       "sha512": "sha512-yZ8+Lgwo+KtRI29TB2mIOEMzV+csMJ+pKZg4YHReAP3vRewWLKKeYfrBDo5FS69rWnEbCfU3sbM+ZEQr+GDLtg==",
       "path": "microcom.runtime/0.11.4",
       "hashPath": "microcom.runtime.0.11.4.nupkg.sha512"
+    },
+    "MySqlConnector/2.6.2": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-dlTc/tsBa42szdvpj4nrHvQVUb0gsMwR9HT6J0Zz2OSqfP0CdYlGw+qQPqCpbnO97idfvclSjKYtM6y5QaBQaQ==",
+      "path": "mysqlconnector/2.6.2",
+      "hashPath": "mysqlconnector.2.6.2.nupkg.sha512"
     },
     "SkiaSharp/3.119.4-preview.1.1": {
       "type": "package",

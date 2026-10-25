@@ -36,6 +36,7 @@ public sealed class InstallerWindow : Window
     private Button? _atomNavigation;
     private Button? _deployNavigation;
     private Button? _explorerNavigation;
+    private Button? _sqlNavigation;
     private Button? _toolsNavigation;
     private Button? _settingsNavigation;
     private Button? _aboutNavigation;
@@ -47,12 +48,16 @@ public sealed class InstallerWindow : Window
     private readonly AssetExplorerView _explorer;
     // The explorer is shown instead of its login wizard while that is connected.
     private bool _explorerShown;
+    private readonly ServerWizard _sqlWizard;
+    private readonly SqlEditorView _sqlEditor;
+    // Like the explorer: the editor replaces its login wizard while that is connected.
+    private bool _sqlShown;
     private readonly ServerWizard _toolsWizard;
     private readonly ToolsView _tools;
-    private ServerWizard[] Wizards => [_wizard, _atomWizard, _deployWizard, _explorerWizard, _toolsWizard];
+    private ServerWizard[] Wizards => [_wizard, _atomWizard, _deployWizard, _explorerWizard, _sqlWizard, _toolsWizard];
     private bool AnyBusy => Wizards.Any(w => w.IsBusy);
     // The wizard on screen; the header and footer show its connection.
-    private ServerWizard Current => _page switch { Page.AtomCms => _atomWizard, Page.DeployAssets => _deployWizard, Page.AssetExplorer => _explorerWizard, Page.Tools or Page.ServerStatus or Page.EmulatorMonitor or Page.Terminal => _toolsWizard, _ => _wizard };
+    private ServerWizard Current => _page switch { Page.AtomCms => _atomWizard, Page.DeployAssets => _deployWizard, Page.AssetExplorer => _explorerWizard, Page.SqlEditor => _sqlWizard, Page.Tools or Page.ServerStatus or Page.EmulatorMonitor or Page.Terminal => _toolsWizard, _ => _wizard };
 
     public InstallerWindow()
     {
@@ -81,6 +86,13 @@ public sealed class InstallerWindow : Window
         _explorerWizard = new ServerWizard([], (_, _, _, _, _) => Text("Opening the explorer ...", 13), "Asset Explorer", keyLogin: true, finishTitle: "Explorer");
         _explorer = new AssetExplorerView(() => _explorerWizard.Connection, () => _explorerWizard.DisconnectAndResetAsync());
         _explorerWizard.StateChanged += () => { if (_page == Page.AssetExplorer) ShowAssetExplorer(); };
+        _sqlWizard = new ServerWizard([], (_, _, _, _, _) => Text("Opening the SQL editor ...", 13), "SQL Editor", keyLogin: true, finishTitle: "Editor");
+        _sqlEditor = new SqlEditorView(() => _sqlWizard.Connection, () => _sqlWizard.DisconnectAndResetAsync());
+        _sqlWizard.StateChanged += async () =>
+        {
+            if (_sqlWizard.Connection is null) await _sqlEditor.CloseSessionAsync();
+            if (_page == Page.SqlEditor) ShowSqlEditor();
+        };
         // No install steps: the wizard only logs in; the tools above it work while it is connected.
         ToolsView? tools = null;
         _toolsWizard = new ServerWizard([], (_, _, _, _, _) => tools!.Connected, "Use the tools", keyLogin: true, finishTitle: "Connected");
@@ -108,6 +120,7 @@ public sealed class InstallerWindow : Window
         };
         Closed += async (_, _) =>
         {
+            await _sqlEditor.CloseSessionAsync();
             foreach (ServerWizard wizard in Wizards) await wizard.DisposeAsync();
         };
         ShowDashboard();
@@ -196,6 +209,8 @@ public sealed class InstallerWindow : Window
         nav.Children.Add(_deployNavigation);
         _explorerNavigation = NavButton("Asset Explorer", Icons.FolderSync, () => { _explorerShown = false; ShowAssetExplorer(); });
         nav.Children.Add(_explorerNavigation);
+        _sqlNavigation = NavButton("SQL Editor", Icons.Database, () => { _sqlShown = false; ShowSqlEditor(); });
+        nav.Children.Add(_sqlNavigation);
         nav.Children.Add(SidebarLabel("TOOLS"));
         _toolsNavigation = NavButton("Tools", Icons.Wrench, ShowTools);
         nav.Children.Add(_toolsNavigation);
@@ -280,7 +295,7 @@ public sealed class InstallerWindow : Window
         _pageScroll.Offset = default;
     }
 
-    private enum Page { Dashboard, Install, AtomCms, DeployAssets, AssetExplorer, Tools, ServerStatus, EmulatorMonitor, Terminal, Settings, About }
+    private enum Page { Dashboard, Install, AtomCms, DeployAssets, AssetExplorer, SqlEditor, Tools, ServerStatus, EmulatorMonitor, Terminal, Settings, About }
     private Page _page;
 
     private void RefreshHeader()
@@ -292,6 +307,9 @@ public sealed class InstallerWindow : Window
             Page.AssetExplorer => ("Asset Explorer", _explorerWizard.Connection is { } explorerConnection
                 ? $"This computer on the left, {explorerConnection.Login.Host}:{GamedataFiles.Root} on the right."
                 : "Addon: manage the files in /var/www/gamedata, with this computer next to it."),
+            Page.SqlEditor => ("SQL Editor", _sqlWizard.Connection is { } sqlConnection
+                ? $"The databases of {sqlConnection.Login.Host}: browse and edit tables, run queries."
+                : "Addon: a database client like HeidiSQL, through the SSH login (no open MariaDB port needed)."),
             Page.DeployAssets => ("Deploy Assets", "Addon: copy the hotel's assets, the client's UI texts and the emulator's images to /var/www/gamedata on the server."),
             Page.Tools => ("Tools", "Restart services, back up and import the database, update, and move your settings."),
             Page.ServerStatus => ("Server status", $"Live figures of {_toolsWizard.Connection?.Login.Host ?? "the server"}, every 2 seconds."),
@@ -337,6 +355,8 @@ public sealed class InstallerWindow : Window
                 Icons.Download, Color.Parse("#8B5CF6"), ShowDeployAssets),
             Tile("Asset Explorer", "Two panes like Norton Commander: this computer and /var/www/gamedata on the server. Upload, download, rename, delete; uploads get the right owner and rights.",
                 Icons.FolderSync, Color.Parse("#2563EB"), () => { _explorerShown = false; ShowAssetExplorer(); }),
+            Tile("SQL Editor", "A database client like HeidiSQL: databases and tables, browse, filter and edit rows, run queries and scripts, export to CSV. MariaDB is reached through the SSH login.",
+                Icons.Database, Color.Parse("#0891B2"), () => { _sqlShown = false; ShowSqlEditor(); }),
             Text("TOOLS", 11, "Pro.Muted", FontWeight.SemiBold),
             Tile("Tools", "Restart services, database backup and import, system / emulator / Octane updates, encrypted settings backup.",
                 Icons.Wrench, Color.Parse("#0E9F9E"), ShowTools));
@@ -407,6 +427,32 @@ public sealed class InstallerWindow : Window
                 _explorerWizard.ApplySettings();
                 ShowScrollPage(_explorerWizard.View);
                 _explorerWizard.FocusCurrentStep();
+            }
+        }
+        RefreshHeader();
+        RefreshFooter();
+    }
+
+    // The login wizard until it is connected, then the editor filling the page (no scrolling around it).
+    private void ShowSqlEditor()
+    {
+        bool connected = _sqlWizard.Connection is { IsConnected: true } && !_sqlWizard.IsBusy;
+        bool switching = _page != Page.SqlEditor || connected != _sqlShown;
+        _page = Page.SqlEditor;
+        ActivateNavigation(_sqlNavigation);
+        if (switching)
+        {
+            _sqlShown = connected;
+            if (connected)
+            {
+                _content.Children.Clear();
+                _pageHost.Content = _sqlEditor;
+            }
+            else
+            {
+                _sqlWizard.ApplySettings();
+                ShowScrollPage(_sqlWizard.View);
+                _sqlWizard.FocusCurrentStep();
             }
         }
         RefreshHeader();

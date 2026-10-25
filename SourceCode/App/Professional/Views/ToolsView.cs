@@ -68,7 +68,8 @@ public sealed class ToolsView
             Tool("Disable firewall", "ufw off: every port is reachable again", Icons.Alert, DisableFirewallAsync)));
         page.Children.Add(Section("Database",
             Tool("Create full database backup", "Dump on the server, download to this computer", Icons.Download, BackupDatabaseAsync),
-            Tool("Import full database", "Replace the hotel database with a backup", Icons.Folder, ImportDatabaseAsync)));
+            Tool("Import full database", "Replace the hotel database with a backup", Icons.Folder, ImportDatabaseAsync),
+            Tool("Recover SQL password", "New MariaDB root password, saved in configuration", Icons.Key, RecoverSqlPasswordAsync)));
         page.Children.Add(Section("Updates",
             Tool("Update system", "apt update, upgrade and dist-upgrade", Icons.Cog, UpdateSystemAsync),
             Tool("Update emulator", "git pull, build.sh, start the new version", Icons.Server, UpdateEmulatorAsync),
@@ -456,6 +457,61 @@ public sealed class ToolsView
         run.Done("imported");
         await FinishAsync(run, ResultKind.Success, "The database is imported",
             $"{Path.GetFileName(local)} is now the hotel database; the emulator has started with it. The database as it was is in {ServerTools.BackupDirectory}/*-before-import-*.sql.gz.");
+    }
+
+    private async Task RecoverSqlPasswordAsync(Window owner, ServerConnection connection)
+    {
+        string host = connection.Login.Host;
+        string path = ClientConfiguration.DatabaseCredentialsPath(host);
+        DatabaseCredentials? saved = ClientConfiguration.LoadDatabaseCredentials(host);
+        if (!await ConfirmAsync(owner, "Reset the MariaDB root password?",
+                $"root on {host} gets a new random password, saved in {path}" + (saved is null ? "." : " (the old file is kept next to it as .bak-<time>).") +
+                " The emulator and AtomCMS log in with their own accounts and keep working. HeidiSQL and other tools need the new password. " +
+                "When root cannot log in through the socket any more, MariaDB restarts for a moment without privilege checks to change it.",
+                "Reset the password")) return;
+
+        RunPanel run = StartRun("Reset the root password on the server", "Test the new password", "Save it in the configuration folder");
+        DatabaseCredentials credentials;
+        if (saved is not null)
+        {
+            credentials = saved with { RootPassword = DatabaseCredentials.NewPassword() };
+        }
+        else
+        {
+            // No file yet: take the other accounts from the server so the new file is complete.
+            run.Log("> No saved MariaDB file for this server: reading the CMS and emulator accounts from the server");
+            var accounts = await Task.Run(() => MariaDbInstaller.ReadAccountsAsync(connection));
+            DatabaseCredentials generated = DatabaseCredentials.Generate(host);
+            credentials = generated with
+            {
+                Database = accounts.Database ?? generated.Database,
+                CmsUser = accounts.CmsUser ?? generated.CmsUser,
+                CmsPassword = accounts.CmsPassword ?? generated.CmsPassword,
+                EmulatorUser = accounts.EmulatorUser ?? generated.EmulatorUser,
+                EmulatorPassword = accounts.EmulatorPassword ?? ""
+            };
+            run.Log($"  CMS account: {(accounts.CmsPassword is null ? "not found, a new password is saved (the MariaDB step sets it)" : $"{credentials.CmsUser} from AtomCMS' .env")}");
+            run.Log($"  Emulator account: {(accounts.EmulatorPassword is null ? "not found" : $"{credentials.EmulatorUser} from config.ini")}");
+        }
+
+        await Task.Run(() => MariaDbInstaller.ResetRootPasswordAsync(connection, credentials, run.Log));
+        run.Done("changed");
+        run.Log("> Logging in with the new password");
+        // 127.0.0.1 (SSH tunnels) and the socket must work. root@'%' only exists on servers this installer set up.
+        string? problem = await Task.Run(() => MariaDbInstaller.TestLoginAsync(connection, credentials.RootUser, credentials.RootPassword, null,
+            local: true, run.Log, remote: false));
+        if (problem is not null) throw new ServerConnectionException(problem);
+        string? remoteProblem = await Task.Run(() => MariaDbInstaller.TestLoginAsync(connection, credentials.RootUser, credentials.RootPassword, null,
+            local: false, run.Log));
+        if (remoteProblem is not null) run.Log($"  ({remoteProblem}: not needed for SSH tunnels)");
+        run.Done("works");
+
+        string file = ClientConfiguration.SaveDatabaseCredentials(credentials);
+        run.Log($"  Saved in {file}");
+        run.Done(Path.GetFileName(file));
+        await FinishAsync(run, ResultKind.Success, "The MariaDB root password is reset",
+            $"The new password of {credentials.RootUser} is in {file}. The SQL Editor uses it from now on; " +
+            "for HeidiSQL, connect through an SSH tunnel to 127.0.0.1:3306 with that password.");
     }
 
     private async Task UpdateSystemAsync(Window owner, ServerConnection connection)

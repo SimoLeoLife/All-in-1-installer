@@ -1012,3 +1012,12 @@ SourceCode/
   Terminal/TerminalSession.cs             SSH shell (xterm-256color) feeding the terminal
   Remote/RemoteScript.cs                  Runs an install script as root with live output
 ```
+
+## Credits
+
+**About** in the sidebar shows the version and the same list.
+
+| | |
+|---|---|
+| **DuckieTM** | The installer, and the [All-in-1 Converter](https://github.com/duckietm/all-in-1-converter) this look and feel comes from. |
+| **Life** | The branch choice (main / dev) for the clone steps and in Settings, the update check for the hotel's repositories, and the installer's own update at startup. |

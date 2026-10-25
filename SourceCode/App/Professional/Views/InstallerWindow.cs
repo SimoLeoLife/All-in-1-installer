@@ -508,14 +508,35 @@ public sealed class InstallerWindow : Window
         RefreshHeader();
     }
 
+    /// <summary>Who made what, in the order they joined in.</summary>
+    private static readonly (string Who, string What)[] Credits =
+    [
+        ("DuckieTM", "The installer, and the All-in-1 Converter this look and feel comes from."),
+        ("Life", "The branch choice (main / dev) for the clone steps and in Settings, the update check for the hotel's " +
+                 "repositories, and the installer's own update at startup.")
+    ];
+
     private void ShowAbout()
     {
         _page = Page.About;
         ActivateNavigation(_aboutNavigation);
         var panel = new StackPanel { Spacing = 8 };
         panel.Children.Add(Text("All-in-1 Installer", 16, weight: FontWeight.SemiBold));
+        panel.Children.Add(Text($"Version {AppUpdate.Current}", 12.5, "Pro.Subtle"));
         panel.Children.Add(Text("Installs a full hotel server (Polaris Emulator, Octane and Octane Renderer) on an Ubuntu Server or Debian machine over SSH.", 13, "Pro.Muted"));
-        panel.Children.Add(Text("Look and feel based on the All-in-1 Converter by DuckieTM.", 12.5, "Pro.Muted"));
+
+        TextBlock heading = Text("CREDITS", 11, "Pro.Muted", FontWeight.SemiBold);
+        heading.Margin = new Thickness(0, 12, 0, 0);
+        panel.Children.Add(heading);
+        foreach ((string who, string what) in Credits)
+        {
+            var line = new Grid { ColumnDefinitions = new ColumnDefinitions("110,*"), ColumnSpacing = 12 };
+            line.Children.Add(Text(who, 12.5, weight: FontWeight.SemiBold));
+            TextBlock contribution = Text(what, 12.5, "Pro.Muted");
+            Grid.SetColumn(contribution, 1);
+            line.Children.Add(contribution);
+            panel.Children.Add(line);
+        }
         ShowScrollPage(Card(panel));
         RefreshHeader();
     }

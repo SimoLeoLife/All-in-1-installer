@@ -12,20 +12,7 @@ public sealed class CloneStep : InstallStep
 {
     private enum ExistingFolderChoice { MoveAside, Abort }
 
-    // ToString is what the branch list shows. One repository writes it as "dev" and another as "Dev", so the
-    // name is matched case-insensitively against the branches the remote really has.
-    private sealed record BranchChoice(string Branch, string Caption)
-    {
-        public override string ToString() => $"{Branch}   ({Caption})";
-    }
-
-    private static readonly BranchChoice[] BranchChoices =
-    [
-        new("main", "stable, the version the hotel runs on"),
-        new("dev", "the newest changes, not always stable")
-    ];
-
-    private readonly ComboBox _branch = new() { MinWidth = 380, ItemsSource = BranchChoices, SelectedIndex = 0 };
+    private readonly ComboBox _branch = new() { MinWidth = 380, ItemsSource = InstallerSettings.BranchChoices, SelectedIndex = 0 };
     private readonly TextBlock _branchNote = new() { FontSize = 11.5, TextWrapping = TextWrapping.Wrap };
     private readonly string _url;
     private readonly string _repository;
@@ -33,8 +20,11 @@ public sealed class CloneStep : InstallStep
     private readonly string _name;
     // The branch of the clone on the server, as the last check found it; null when there is no clone.
     private string? _clonedBranch;
+    // Set while the saved branch is put in the list, so that does not count as a change to save again.
+    private bool _settingBranch;
 
-    private string SelectedBranch => (_branch.SelectedItem as BranchChoice ?? BranchChoices[0]).Branch;
+    private string SelectedBranch =>
+        (_branch.SelectedItem as InstallerSettings.BranchChoice ?? InstallerSettings.BranchChoices[0]).Branch;
 
     public override string Title { get; }
     public override string Caption { get; }
@@ -62,15 +52,22 @@ public sealed class CloneStep : InstallStep
         _target = target;
         _name = repository.Split('/').Last();
 
-        string saved = InstallerSettings.Load().BranchFor(repository);
-        _branch.SelectedItem = BranchChoices.FirstOrDefault(b => b.Branch == saved) ?? BranchChoices[0];
-        // Subscribed after the saved branch is selected, so opening the step saves nothing.
+        ShowSavedBranch();
         _branch.SelectionChanged += (_, _) => BranchChosen();
     }
 
-    /// <summary>The chosen branch stays chosen for this repository, also in the next wizard.</summary>
+    /// <summary>Puts the saved branch in the list; the Settings page may have changed it since this step was made.</summary>
+    private void ShowSavedBranch()
+    {
+        _settingBranch = true;
+        _branch.SelectedItem = InstallerSettings.ChoiceFor(InstallerSettings.Load().BranchFor(_repository));
+        _settingBranch = false;
+    }
+
+    /// <summary>The chosen branch stays chosen for this repository, also on the Settings page and next time.</summary>
     private void BranchChosen()
     {
+        if (_settingBranch) return;
         InstallerSettings settings = InstallerSettings.Load();
         settings.SetBranch(_repository, SelectedBranch);
         settings.Save();
@@ -101,6 +98,7 @@ public sealed class CloneStep : InstallStep
 
     protected override async Task<bool> DetectCoreAsync(ServerConnection connection)
     {
+        ShowSavedBranch();
         CloneState state = await Task.Run(() => GitCloneInstaller.InspectAsync(connection, _url, _target));
         _clonedBranch = state.Kind == CloneTargetKind.SameRepository ? state.Branch : null;
         ShowBranchNote();

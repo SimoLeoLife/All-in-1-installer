@@ -318,7 +318,8 @@ log keeps only the readable progress lines.
 
 Every step has a **Branch** choice: **main** (stable, the version the hotel runs on) or **dev** (the newest
 changes, not always stable). The choice is remembered per repository in `configuration/settings.json`, so the
-next installation starts with it. The name is matched without case against the branches the repository really
+next installation starts with it, and **Settings → Repository branches** sets the same thing for all three
+without logging in to a server. The name is matched without case against the branches the repository really
 has, because Polaris writes it as `dev` and Octane and the Renderer as `Dev`.
 
 - **Folder missing or empty**: `git clone --branch <the branch you picked>`.
@@ -844,6 +845,10 @@ port; **Log in to MariaDB** asks again.
 - **Default server** and **SSH key**: Install New Server, the addons and Tools fill in the server; the key is selected
   for "My own SSH key" (which is then chosen) and is tried first by the addons and Tools. Stored in
   `configuration/settings.json`, so the encrypted settings backup takes it along.
+- **Repository branches**: the branch Install New Server clones for Polaris, Octane and Octane-Renderer: **main**
+  or **dev**. The clone steps start with what is chosen here, and a change made on a clone step is saved back to
+  here, so both always agree. An existing clone that is on another branch is switched over by the step, never
+  silently. Stored in `configuration/settings.json` under `Branches`; a repository left on main is not written.
 - **SSH keys**: every key in `configuration/keys`, and **Import a key** for a server: a key file, or paste it. A private
   key (OpenSSH, PEM or PuTTY `.ppk`; it asks for the key's password once to read its public key) is stored as
   `keys/<server>/imported_<type>` with its `.pub`, still protected by its own password. A public key alone is stored as

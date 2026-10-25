@@ -33,6 +33,10 @@ public sealed class SettingsView
     };
     private readonly ResultBanner _importResult = new();
     private readonly StackPanel _keyList = new() { Spacing = 6 };
+    // One branch list per repository the clone steps use, in the order of the dashboard's component list.
+    private readonly ComboBox[] _branches = InstallerWindow.Components
+        .Select(_ => new ComboBox { MinWidth = 380, ItemsSource = InstallerSettings.BranchChoices }).ToArray();
+    private readonly ResultBanner _branchesResult = new();
 
     public Control View { get; }
 
@@ -40,6 +44,7 @@ public sealed class SettingsView
     {
         var page = new StackPanel { Spacing = 18 };
         page.Children.Add(Card(BuildDefaults(), new Thickness(24, 20)));
+        page.Children.Add(Card(BuildBranches(), new Thickness(24, 20)));
         page.Children.Add(Card(BuildKeys(), new Thickness(24, 20)));
         page.Children.Add(Card(BuildDownloader(), new Thickness(24, 20)));
         View = page;
@@ -58,6 +63,8 @@ public sealed class SettingsView
         _defaultKey.SelectedItem = items.FirstOrDefault(i => i.Path == settings.DefaultKeyPath) ?? items[0];
         if (string.IsNullOrWhiteSpace(_importFor.Text) && settings.DefaultServer is { Length: > 0 } server)
             _importFor.Text = ServerLogin.ParseHost(server).Host;
+        for (int i = 0; i < _branches.Length; i++)
+            _branches[i].SelectedItem = InstallerSettings.ChoiceFor(settings.BranchFor(InstallerWindow.Components[i].Repository));
         RefreshKeyList();
     }
 
@@ -111,6 +118,38 @@ public sealed class SettingsView
         _defaultsResult.Show(ResultKind.Success, "Saved",
             (server.Length > 0 ? $"The wizards fill in {server}" : "No default server") + (key is null ? "." : $", with the key {Path.GetFileName(key)}."));
     }
+
+    private Control BuildBranches()
+    {
+        var panel = new StackPanel { Spacing = 10 };
+        panel.Children.Add(Text("Repository branches", 15, weight: FontWeight.SemiBold));
+        panel.Children.Add(Text("Which branch Install New Server clones for each repository: main for the stable version, dev for the newest changes. " +
+                                "The clone steps start with what is chosen here, and a change made there is saved back to here. " +
+                                "An existing clone on another branch is switched over by the step, never silently.", 12.5, "Pro.Muted"));
+        for (int i = 0; i < _branches.Length; i++)
+        {
+            panel.Children.Add(Label($"{InstallerWindow.Components[i].Name}   (github.com/{InstallerWindow.Components[i].Repository})"));
+            panel.Children.Add(_branches[i]);
+        }
+        var save = new Button { Content = "Save", Padding = new Thickness(22, 9), Classes = { "primary" } };
+        save.Click += (_, _) => SaveBranches();
+        panel.Children.Add(save);
+        panel.Children.Add(_branchesResult);
+        return panel;
+    }
+
+    private void SaveBranches()
+    {
+        InstallerSettings settings = InstallerSettings.Load();
+        for (int i = 0; i < _branches.Length; i++) settings.SetBranch(InstallerWindow.Components[i].Repository, SelectedBranch(i));
+        settings.Save();
+        _branchesResult.Show(ResultKind.Success, "Saved",
+            string.Join(", ", _branches.Select((_, i) => $"{InstallerWindow.Components[i].Name}: {SelectedBranch(i)}")) +
+            ". The clone steps of the next installation start with this.");
+    }
+
+    private string SelectedBranch(int i) =>
+        (_branches[i].SelectedItem as InstallerSettings.BranchChoice ?? InstallerSettings.BranchChoices[0]).Branch;
 
     private Control BuildKeys()
     {

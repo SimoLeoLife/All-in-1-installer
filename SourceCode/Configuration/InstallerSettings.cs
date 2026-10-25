@@ -22,6 +22,26 @@ public sealed class InstallerSettings
 
     public const string DefaultBranch = "main";
 
+    /// <summary>A branch to choose from, with the line the lists show behind its name.</summary>
+    public sealed record BranchChoice(string Branch, string Caption)
+    {
+        public override string ToString() => $"{Branch}   ({Caption})";
+    }
+
+    /// <summary>
+    /// What the Settings page and the clone steps offer. One repository writes it as "dev" and another as
+    /// "Dev"; the clone step matches the name case-insensitively against the branches the remote has.
+    /// </summary>
+    public static readonly BranchChoice[] BranchChoices =
+    [
+        new(DefaultBranch, "stable, the version the hotel runs on"),
+        new("dev", "the newest changes, not always stable")
+    ];
+
+    /// <summary>The entry for a branch name, or main.</summary>
+    public static BranchChoice ChoiceFor(string branch) =>
+        BranchChoices.FirstOrDefault(b => b.Branch == branch) ?? BranchChoices[0];
+
     private static string File => Path.Combine(ClientConfiguration.Directory, "settings.json");
 
     public static InstallerSettings Load()

@@ -1,10 +1,12 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Styling;
 using AllInOneInstaller.Remote;
+using AllInOneInstaller.Update;
 using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 
 namespace AllInOneInstaller.App.Professional.Views;
@@ -123,7 +125,23 @@ public sealed class InstallerWindow : Window
             await _sqlEditor.CloseSessionAsync();
             foreach (ServerWizard wizard in Wizards) await wizard.DisposeAsync();
         };
+        Opened += async (_, _) => await CheckForUpdateAsync();
         ShowDashboard();
+    }
+
+    /// <summary>
+    /// Asks GitHub at startup whether a newer version of the installer itself was released, and offers to
+    /// replace this program with it. Only the published single-file program updates itself; a repository
+    /// without releases, or no internet, means nothing is shown.
+    /// </summary>
+    private async Task CheckForUpdateAsync()
+    {
+        AppUpdate.CleanUp();
+        if (await AppUpdate.CheckAsync() is not { } update) return;
+        _status.Text = $"Version {update.Version} of the installer is available.";
+        if (!await UpdateDialog.ShowAsync(this, update)) return;
+        AppUpdate.Restart();
+        (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Shutdown();
     }
 
     private Control BuildLayout()

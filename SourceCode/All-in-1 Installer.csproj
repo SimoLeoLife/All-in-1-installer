@@ -5,6 +5,8 @@
     <TargetFramework>net11.0</TargetFramework>
     <RootNamespace>AllInOneInstaller</RootNamespace>
     <AssemblyName>All-in-1 Installer</AssemblyName>
+    <!-- The startup update check compares this with the newest GitHub release tag. -->
+    <Version>1.0.0</Version>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <ApplicationIcon>favicon.ico</ApplicationIcon>

@@ -181,6 +181,9 @@ or **Abort installation**. If nginx.org's NGINX is already there, the step upgra
 ![NGINX installed](docs/screenshots/nginx-installed.png)
 
 Long commands stream their output live into the log (`ServerConnection.RunAsRootStreamingAsync`).
+**Copy log** in the top right corner of the log puts it on the clipboard, so a failure can be pasted into a
+message instead of screenshotted. Select lines first to copy only those; Ctrl+C does the same. The button is
+on every log in the program: the install steps, the connect page and the Tools.
 
 Before every `apt-get update` the installer checks the **server clock** against the `Date` header of
 `deb.debian.org`. A clock that is more than 2 minutes off is corrected and automatic time sync (NTP) is switched
@@ -976,7 +979,7 @@ SourceCode/
   App/Professional/Views/ChoiceDialog.cs  Question with described answers
   App/Professional/Views/UpdateDialog.cs  "A new version is available" at startup, with the download
   App/Professional/Views/ProgressControls.cs    Check list and result banner
-  App/Professional/Views/LogView.cs       Console output panel
+  App/Professional/Views/LogView.cs       Console output panel, with Copy log
   Update/AppUpdate.cs                     Checks GitHub releases at startup and replaces the program with a newer one
   Configuration/ClientConfiguration.cs    The configuration/ directory on the client
   Configuration/DatabaseCredentials.cs    Generated MariaDB passwords and their file format

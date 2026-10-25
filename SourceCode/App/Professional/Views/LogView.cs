@@ -4,7 +4,9 @@ using Avalonia.Controls;
 using Avalonia.Controls.Templates;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Threading;
 using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 
 namespace AllInOneInstaller.App.Professional.Views;
@@ -12,9 +14,24 @@ namespace AllInOneInstaller.App.Professional.Views;
 /// <summary>Virtualized log list that follows new output unless the user has scrolled up.</summary>
 public sealed class LogView : Border
 {
+    private const string CopyLabel = "Copy log";
+
     private readonly AvaloniaList<string> _lines;
     private readonly ListBox _list;
     private readonly TextBlock _placeholder;
+    // Floats in the top right corner of the log, so a failure can be pasted somewhere without a screenshot.
+    private readonly Button _copy = new()
+    {
+        Content = CopyLabel,
+        Padding = new Thickness(10, 3),
+        FontSize = 11,
+        Classes = { "secondary" },
+        HorizontalAlignment = HorizontalAlignment.Right,
+        VerticalAlignment = VerticalAlignment.Top,
+        Margin = new Thickness(0, 8, 18, 0),
+        Opacity = 0.85
+    };
+    private readonly DispatcherTimer _copyLabelBack = new() { Interval = TimeSpan.FromSeconds(2) };
     private ScrollViewer? _scroll;
     private bool _follow = true;
     private bool _pointerDown;
@@ -72,11 +89,30 @@ public sealed class LogView : Border
             Margin = new Thickness(14, 12),
             IsHitTestVisible = false
         };
-        lines.CollectionChanged += (_, _) => _placeholder.IsVisible = _lines.Count == 0;
+        ToolTip.SetTip(_copy, "Copies the whole log to the clipboard, or only the lines you selected. Ctrl+C does the same.");
+        _copy.IsVisible = _lines.Count > 0;
+        _copy.Click += async (_, _) =>
+        {
+            int copied = await CopyAsync(selectedOnly: true);
+            _copy.Content = copied > 0 ? $"Copied {copied} line{(copied == 1 ? "" : "s")}" : "Nothing to copy";
+            _copyLabelBack.Stop();
+            _copyLabelBack.Start();
+        };
+        _copyLabelBack.Tick += (_, _) =>
+        {
+            _copyLabelBack.Stop();
+            _copy.Content = CopyLabel;
+        };
+        lines.CollectionChanged += (_, _) =>
+        {
+            _placeholder.IsVisible = _lines.Count == 0;
+            _copy.IsVisible = _lines.Count > 0;
+        };
 
         var grid = new Grid();
         grid.Children.Add(_list);
         grid.Children.Add(_placeholder);
+        grid.Children.Add(_copy);
         Child = grid;
     }
 

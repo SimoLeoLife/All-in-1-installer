@@ -19,6 +19,13 @@
     <Content Include="favicon.ico" />
   </ItemGroup>
 
+  <!-- Client images Octane needs (also in Polaris' Assets/): next to the executable, so Deploy Assets can upload what
+       the server is missing. Not inside the single-file bundle: extra images can be dropped in this folder. -->
+  <ItemGroup>
+    <Content Include="..\Assets\**\*" Link="Assets\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
   <!-- Native graphics packages ship Windows debug symbols even for Release
        single-file publishes. They are not required at runtime. -->
   <Target Name="RemoveNativeDebugSymbolsFromPublish" AfterTargets="Publish">

@@ -29,7 +29,7 @@ public static class HotelSite
                 }
         """;
 
-    // Octane on the site itself.
+    // Octane serves the site root.
     private const string OctaneLocations = """
             location / {
                 try_files $uri $uri/ /index.html;
@@ -59,7 +59,7 @@ public static class HotelSite
             }
         """;
 
-    // AtomCMS is the site; Octane is served from /client/ (the CMS opens /client/index.html?sso=...).
+    // AtomCMS serves the site and Octane lives under /client/, which the CMS opens as /client/index.html?sso=...
     private const string AtomLocations = $$"""
             client_max_body_size 20m;
 
@@ -118,7 +118,7 @@ public static class HotelSite
         string serverName = site.IsIpAddress ? "_" : site.Address.StartsWith("www.", StringComparison.Ordinal)
             ? $"{site.Address} {site.Address[4..]}" : $"{site.Address} www.{site.Address}";
         string host = site.Address.StartsWith("www.", StringComparison.Ordinal) ? site.Address[4..] : site.Address;
-        // /gamedata CORS: only the hotel's own pages, with or without www.
+        // /gamedata only allows CORS from the hotel's own pages, with or without www.
         string origin = site.IsIpAddress
             ? $"~^https?://{System.Text.RegularExpressions.Regex.Escape(site.Address)}$"
             : $"~^https?://(www\\.)?{System.Text.RegularExpressions.Regex.Escape(host)}$";
@@ -218,7 +218,7 @@ public static class HotelSite
         install -d -m 755 {{LogDirectory}}
         install -d -m 2775 -o www-data -g www-data {{OctaneInstaller.Gamedata}} {{OctaneInstaller.Gamedata}}/custom \
           {{Camera}} {{Camera}}/thumb
-        # NGINX (user nginx) reads what the emulator writes there (group www-data, mode 640).
+        # The nginx user must read what the emulator writes there with group www-data and mode 640.
         if id nginx >/dev/null 2>&1 && ! id -nG nginx | grep -qw www-data; then
           usermod -aG www-data nginx
           echo "  nginx is now in the www-data group (to read the emulator's camera photos)"
@@ -231,7 +231,7 @@ public static class HotelSite
         sed -i "s#@ROOT@#$root#" {{File}}
         ln -sfn {{File}} /etc/nginx/sites-enabled/hotel
 
-        # Port 80 is Traefik's: the default site (and any other site on 80/443) must not take it.
+        # Ports 80 and 443 belong to Traefik, so the default site and any other site must not listen there.
         if [ -L /etc/nginx/sites-enabled/default ] || [ -f /etc/nginx/sites-enabled/default ]; then
           rm -f /etc/nginx/sites-enabled/default
           echo "  The default site is disabled (still in sites-available/default)"

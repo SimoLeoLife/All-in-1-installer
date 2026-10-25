@@ -5,7 +5,7 @@ using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 
 namespace AllInOneInstaller.App.Professional.Views;
 
-/// <summary>A list of steps that get ticked off: done (check + detail), running, failed (cross) or pending.</summary>
+/// <summary>A list of steps that are ticked off as they finish.</summary>
 public sealed class CheckList : StackPanel
 {
     private readonly string[] _labels;
@@ -23,7 +23,7 @@ public sealed class CheckList : StackPanel
 
     public void SetDetail(int index, string detail) => _details[index] = detail;
 
-    /// <summary>Steps before <paramref name="running"/> are done; <paramref name="running"/> is busy or failed.</summary>
+    /// <summary>Marks the steps before <paramref name="running"/> as done and that step as busy or failed.</summary>
     public void Update(int running, bool failed)
     {
         Children.Clear();

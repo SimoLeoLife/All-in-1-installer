@@ -2,10 +2,10 @@ using System.Globalization;
 
 namespace AllInOneInstaller.Remote;
 
-/// <summary>One thread of the emulator's JVM: its CPU ticks so far and its state (R running, S sleeping ...).</summary>
+/// <summary>One thread of the emulator's JVM with its CPU ticks so far and its /proc state letter.</summary>
 public sealed record JvmThread(int Id, string Name, char State, long Ticks);
 
-/// <summary>A reading of the emulator process. Ticks are counters: compare two samples for a rate.</summary>
+/// <summary>A reading of the emulator process. Ticks are cumulative, so compare two samples to get a rate.</summary>
 public sealed record EmulatorSample(
     DateTime At,
     int Pid,
@@ -20,7 +20,7 @@ public sealed record EmulatorSample(
 {
     public bool Running => Pid > 0;
 
-    /// <summary>CPU of the whole process: percent of the server, and percent of one core.</summary>
+    /// <summary>CPU use of the whole process as a percentage of the server and of one core.</summary>
     public (double Server, double Core) Cpu(EmulatorSample previous)
     {
         long machine = MachineTicks - previous.MachineTicks;
@@ -53,12 +53,12 @@ public sealed record SlowWiredRoom(int RoomId, string? Name, int Count, int Slow
 public sealed record WiredLogSummary(IReadOnlyList<SlowWiredRoom> Rooms, IReadOnlyList<string> Recent, int SlowTasks, int DroppedWarnings);
 
 /// <summary>
-/// Insight into the emulator without changing it: per-thread CPU of its JVM from /proc (the wired engine runs on
-/// WiredTickCoordinator, WiredTickShard-N and WiredTickHeavy-N), and the slow-wired warnings in its log.
+/// Read-only insight into the emulator, from per-thread CPU of its JVM in /proc and the slow-wired warnings in its log.
+/// The wired engine runs on WiredTickCoordinator, WiredTickShard-N and WiredTickHeavy-N.
 /// </summary>
 public static class EmulatorMonitor
 {
-    // Prefixes: names from /proc are cut to 15 characters (WiredTickCoordi) when jcmd gave no full names.
+    // Matches prefixes because /proc cuts names to 15 characters, such as WiredTickCoordi, when jcmd gave no full names.
     public static string Group(string thread) => thread switch
     {
         _ when thread.StartsWith("WiredTick", StringComparison.Ordinal) => "Wired",
@@ -88,7 +88,7 @@ public static class EmulatorMonitor
         echo "machine $(head -1 /proc/stat | awk '{ s = 0; for (i = 2; i <= 9; i++) s += $i; print s }')"
         if [ -n "$pid" ] && [ -d /proc/$pid ]; then
           echo "pid $pid"
-          # comm can hold spaces and brackets: the fields after the last ')' are fixed.
+          # comm can hold spaces and brackets, so count fields from after the last ')'.
           awk '{ sub(/.*\) /, ""); print "proc", $12 + $13, $20 }' /proc/$pid/stat
           echo "rss $(awk '/^VmRSS:/ {print $2 * 1024}' /proc/$pid/status)"
           echo "xmx $(tr '\0' '\n' < /proc/$pid/cmdline | sed -n 's/^-Xmx\([0-9]*\)\([mMgG]\)$/\1 \2/p')"
@@ -133,8 +133,8 @@ public static class EmulatorMonitor
     }
 
     /// <summary>
-    /// The JVM's own thread names by Linux thread id, from jcmd Thread.print (as the emulator account). Linux keeps
-    /// only 15 characters, so "WiredTickShard-0" .. "-5" all read "WiredTickShard-" in /proc. Empty when jcmd is
+    /// The JVM's own thread names by Linux thread id, from jcmd Thread.print run as the emulator account. Linux keeps
+    /// only 15 characters, so every WiredTickShard-N thread reads "WiredTickShard-" in /proc. Empty when jcmd is
     /// missing or refuses.
     /// </summary>
     public static async Task<Dictionary<int, string>> ThreadNamesAsync(ServerConnection connection, int pid, CancellationToken token = default)

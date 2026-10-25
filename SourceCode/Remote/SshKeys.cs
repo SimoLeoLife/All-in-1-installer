@@ -79,14 +79,14 @@ public static class SshKeys
             w.MpInt(p.P!);
             w.MpInt(p.Q!);
         });
-        // PuTTY: d, p, q, q^-1 mod p; n and e are in the public part.
+        // PuTTY stores d, p, q and q^-1 mod p. n and e are in the public part.
         byte[] puttyPrivate = Blob(w => { w.MpInt(p.D!); w.MpInt(p.P!); w.MpInt(p.Q!); w.MpInt(p.InverseQ!); });
         string putty = PuttyPrivateKey("ssh-rsa", publicBlob, puttyPrivate, comment, passphrase);
         return new SshKeyPair(SshKeyType.Rsa4096, OpenSshPrivateKey(publicBlob, privateFields, comment, passphrase), putty,
             new AuthorizedKey("ssh-rsa", Convert.ToBase64String(publicBlob), comment));
     }
 
-    // "openssh-key-v1" as written by ssh-keygen: aes256-ctr with a bcrypt_pbkdf key when there is a passphrase.
+    // "openssh-key-v1" as ssh-keygen writes it, with aes256-ctr and a bcrypt_pbkdf key when there is a passphrase.
     private static string OpenSshPrivateKey(byte[] publicBlob, byte[] privateFields, string comment, string passphrase)
     {
         bool encrypted = passphrase.Length > 0;
@@ -129,17 +129,17 @@ public static class SshKeys
         return pem.ToString();
     }
 
-    // PPK v2, readable by every PuTTY since 0.52 including HeidiSQL's plink; v3 would need Argon2.
-    // Encrypted: AES-256-CBC, zero IV, key = SHA1(0000 || pass) || SHA1(0001 || pass), truncated to 32 bytes.
-    // MAC: HMAC-SHA1 keyed with SHA1("putty-private-key-file-mac-key" || pass), over algorithm, encryption,
-    // comment, public blob and the padded private plaintext.
+    // PPK v2, which every PuTTY since 0.52 reads, HeidiSQL's plink included. v3 would need Argon2.
+    // Encryption is AES-256-CBC with a zero IV and the key SHA1(0000 || pass) || SHA1(0001 || pass) cut to 32 bytes.
+    // The MAC is HMAC-SHA1 keyed with SHA1("putty-private-key-file-mac-key" || pass) over the algorithm, encryption,
+    // comment, public blob and padded private plaintext.
     private static string PuttyPrivateKey(string algorithm, byte[] publicBlob, byte[] privateBlob, string comment, string passphrase)
     {
         bool encrypted = passphrase.Length > 0;
         string encryption = encrypted ? "aes256-cbc" : "none";
         byte[] secret = Encoding.UTF8.GetBytes(passphrase);
 
-        // Padded to the AES block size; readers ignore what follows the key, and the MAC covers it.
+        // Padded to the AES block size. Readers ignore what follows the key, and the MAC covers it.
         byte[] plain = privateBlob;
         if (encrypted && plain.Length % 16 != 0)
             plain = [.. plain, .. RandomNumberGenerator.GetBytes(16 - plain.Length % 16)];
@@ -199,6 +199,40 @@ public static class SshKeys
         byte[] stream = aes.EncryptEcb(counters, PaddingMode.None);
         for (int i = 0; i < data.Length; i++) stream[i] ^= data[i];
         return stream;
+    }
+
+    public static bool IsPrivateKey(string text) =>
+        text.Contains("PRIVATE KEY", StringComparison.Ordinal) || text.TrimStart().StartsWith("PuTTY-User-Key-File", StringComparison.Ordinal);
+
+    /// <summary>Thrown by <see cref="PublicKeyOf"/> when the private key is encrypted and the password is missing or wrong.</summary>
+    public sealed class KeyPasswordException(string message) : Exception(message);
+
+    /// <summary>Reads the public key from an OpenSSH, PEM or .ppk private key the same way SSH.NET does when logging in.</summary>
+    public static AuthorizedKey PublicKeyOf(string privateKeyText, string passphrase, string comment)
+    {
+        Renci.SshNet.PrivateKeyFile file;
+        try
+        {
+            using var stream = new MemoryStream(Encoding.UTF8.GetBytes(privateKeyText.Trim() + "\n"));
+            file = new Renci.SshNet.PrivateKeyFile(stream, passphrase.Length > 0 ? passphrase : null);
+        }
+        catch (Renci.SshNet.Common.SshPassPhraseNullOrEmptyException)
+        {
+            throw new KeyPasswordException("This key has a password: enter it.");
+        }
+        catch (Exception ex) when (ex is Renci.SshNet.Common.SshException or CryptographicException or ArgumentException or InvalidOperationException or FormatException)
+        {
+            if (passphrase.Length > 0) throw new KeyPasswordException("The key could not be opened: wrong key password?");
+            throw new FormatException($"This is not a private key the installer can use: {ex.Message}");
+        }
+        using (file)
+        {
+            // The public key blob starts with its type string.
+            byte[] blob = file.HostKeyAlgorithms.First().Data;
+            int length = BinaryPrimitives.ReadInt32BigEndian(blob);
+            string type = Encoding.ASCII.GetString(blob, 4, length);
+            return new AuthorizedKey(type, Convert.ToBase64String(blob), CleanComment(comment));
+        }
     }
 
     /// <summary>Accepts the OpenSSH one-line format or the RFC 4716 format PuTTYgen saves.</summary>
@@ -268,7 +302,7 @@ public static class SshKeys
         {
             if (continued || line.Contains(':'))
             {
-                // Header lines; a trailing backslash continues the header on the next line.
+                // Header line. A trailing backslash continues it on the next line.
                 if (!continued && line.StartsWith("Comment:", StringComparison.OrdinalIgnoreCase))
                     comment = line["Comment:".Length..].Trim().Trim('"');
                 continued = line.EndsWith('\\');
@@ -301,8 +335,6 @@ public static class SshKeys
     public static string CleanComment(string comment) =>
         string.Join(' ', comment.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Select(w => new string(w.Where(c => !char.IsControl(c)).ToArray())));
 
-    // SSH wire format
-
     private static byte[] Blob(Action<SshWriter> write)
     {
         var writer = new SshWriter();
@@ -332,7 +364,7 @@ public static class SshKeys
 
         public void String(string value) => Bytes(Encoding.UTF8.GetBytes(value));
 
-        // Big-endian two's complement: no leading zeros, plus a zero byte when the top bit is set.
+        // Big-endian two's complement without leading zeros, plus a zero byte when the top bit is set.
         public void MpInt(byte[] unsignedBigEndian)
         {
             int start = 0;

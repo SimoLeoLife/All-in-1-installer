@@ -5,9 +5,8 @@ using System.Text;
 namespace AllInOneInstaller.Configuration;
 
 /// <summary>
-/// The configuration directory (SSH keys, .ppk files, MariaDB passwords of every server) as one file encrypted
-/// with a password, to move it to another computer. AES-256-GCM; the key comes from the password with
-/// PBKDF2-SHA256.
+/// Packs the configuration directory, including SSH keys and MariaDB passwords, into one password-encrypted file
+/// for moving to another computer. Uses AES-256-GCM with a key derived by PBKDF2-SHA256.
 /// </summary>
 public static class SettingsBackup
 {
@@ -40,8 +39,8 @@ public static class SettingsBackup
     }
 
     /// <summary>
-    /// Replaces the configuration directory with the backup; the current one is kept next to it as
-    /// configuration.bak-&lt;time&gt;. Returns that folder (null when there was nothing) and the file count.
+    /// Replaces the configuration directory with the backup and keeps the current one as configuration.bak-&lt;time&gt;.
+    /// Returns that folder, or null if there was nothing to keep, and the file count.
     /// </summary>
     public static (string? Previous, int Files) Import(string file, string password)
     {

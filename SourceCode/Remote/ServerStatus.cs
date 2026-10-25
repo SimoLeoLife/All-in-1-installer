@@ -9,7 +9,7 @@ public sealed record DiskUsage(string Mount, string Device, long Total, long Use
 
 public sealed record LoggedInUser(string User, string Terminal, string Since, string From);
 
-/// <summary>One reading of the server. CPU and network are counters: compare two samples for a rate.</summary>
+/// <summary>One reading of the server. CPU and network are counters, so compare two samples for a rate.</summary>
 public sealed record StatusSample(
     DateTime At,
     long CpuTotal,
@@ -51,7 +51,7 @@ public sealed record RepositoryVersion(string Name, string Directory, string? Br
 /// <summary>Live figures for the Server status dashboard, read from /proc in one short command per sample.</summary>
 public static class ServerStatus
 {
-    // Network: the server's own interfaces, not loopback or Docker's bridges.
+    // Network totals cover the server's own interfaces, not loopback or Docker's bridges.
     private const string SampleScript = $$"""
         echo "cpu $(head -1 /proc/stat)"
         echo "cores $(nproc)"

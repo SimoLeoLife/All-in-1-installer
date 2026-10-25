@@ -5,14 +5,14 @@ public sealed record DatabaseBackup(string RemotePath, string Database, long Byt
 
 public sealed record EmulatorUpdate(string? OldVersion, string? NewVersion, bool Changed);
 
-/// <summary>The Tools page: restarts, database backup and import, and updates of the system, emulator and Octane.</summary>
+/// <summary>Restarts, database backup and import, and updates for the Tools page.</summary>
 public static class ServerTools
 {
-    /// <summary>Database dumps made by the tools (only root can read them: they hold every password hash).</summary>
+    /// <summary>Database dumps made by the tools. Only root can read them because they hold every password hash.</summary>
     public const string BackupDirectory = "/var/backups/all-in-1";
     public const int KeptBackups = 10;
 
-    // The hotel database: the emulator's config.ini, else habbo.
+    // The hotel database from the emulator's config.ini, or habbo.
     private const string Database = $$"""
         db=$(grep -sE '^db.database=' {{EmulatorInstaller.Directory}}/config.ini | cut -d= -f2 | tr -d '[:space:]')
         db=${db:-habbo}
@@ -48,7 +48,7 @@ public static class ServerTools
         return RemoteScript.RunAsync(connection, script, log, "Restarting MariaDB failed", token);
     }
 
-    /// <summary>NGINX, and PHP-FPM when it is installed (AtomCMS runs on it).</summary>
+    /// <summary>Restarts NGINX, and PHP-FPM too when it is installed because AtomCMS runs on it.</summary>
     public static Task RestartNginxAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
@@ -84,8 +84,7 @@ public static class ServerTools
     }
 
     /// <summary>
-    /// mariadb-dump of the hotel database (with CREATE DATABASE and USE) into a .sql.gz in /var/backups/all-in-1;
-    /// the newest <see cref="KeptBackups"/> are kept.
+    /// Dumps the hotel database with CREATE DATABASE and USE to a .sql.gz and keeps the newest <see cref="KeptBackups"/>.
     /// </summary>
     public static async Task<DatabaseBackup> BackupDatabaseAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
@@ -102,7 +101,7 @@ public static class ServerTools
               { rm -f "$file"; fail "mariadb-dump stopped (see above)."; }
             gzip -t "$file" || fail "The backup $file is damaged."
             echo "  $(du -h "$file" | cut -f1) in $(( $(date +%s) - start )) seconds"
-            # Keep the newest backups of this database (not counting the safety backups made before an import).
+            # Keep the newest backups of this database, not counting the safety backups made before an import.
             ls -1t {{BackupDirectory}}/"$db"-2*.sql.gz 2>/dev/null | tail -n +{{KeptBackups + 1}} | while read -r old; do
               rm -f "$old"; echo "  Removed the old backup $old"
             done
@@ -116,9 +115,8 @@ public static class ServerTools
     }
 
     /// <summary>
-    /// Replaces the hotel database with <paramref name="remoteFile"/> (.sql or .sql.gz): makes a safety backup,
-    /// stops the emulator, recreates the database with its old character set, imports, and starts the emulator
-    /// again (which runs its migrations). Database names in CREATE DATABASE / USE lines become the hotel's.
+    /// Replaces the hotel database with a .sql or .sql.gz dump after a safety backup. The database keeps its character
+    /// set, and names in CREATE DATABASE and USE lines become the hotel's. The emulator runs its migrations on restart.
     /// </summary>
     public static Task ImportDatabaseAsync(ServerConnection connection, string remoteFile, Action<string> log, CancellationToken token = default)
     {
@@ -131,7 +129,7 @@ public static class ServerTools
             chmod 600 "$f"
             trap 'rm -f "$f"' EXIT
             if gzip -t "$f" 2>/dev/null; then read_dump() { gunzip -c "$f"; }; else read_dump() { cat "$f"; }; fi
-            # No pipefail here: head ends the pipe early on purpose.
+            # No pipefail here because head ends the pipe early on purpose.
             (set +o pipefail; read_dump | head -c 65536 | grep -qiE '^(CREATE TABLE|INSERT INTO|-- MariaDB dump|-- MySQL dump)') ||
               fail "$(basename "$f") does not look like a SQL dump (no CREATE TABLE or INSERT INTO near the start)."
 

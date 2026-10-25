@@ -11,9 +11,8 @@ using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 namespace AllInOneInstaller.App.Professional.Views;
 
 /// <summary>
-/// The Tools page: <see cref="Workspace"/> (restarts, database backup and import, updates) is always shown and
-/// works once the key-login wizard above it is connected (<see cref="Connected"/> is that wizard's last page);
-/// <see cref="Settings"/> (encrypted export and import of the configuration directory) works without a server.
+/// The Tools page. <see cref="Workspace"/> is always shown but only works once the key-login wizard above it is
+/// connected. <see cref="Settings"/> works without a server.
 /// </summary>
 public sealed class ToolsView
 {
@@ -35,7 +34,7 @@ public sealed class ToolsView
     public Control Connected { get; }
     public Control Settings { get; }
 
-    /// <param name="busy">Marks the page busy (buttons hidden, navigation blocked) with a status line.</param>
+    /// <param name="busy">Marks the page busy with a status line, which hides the buttons and blocks navigation.</param>
     public ToolsView(Func<ServerConnection?> connection, Action<bool, string> busy)
     {
         _connection = connection;
@@ -49,8 +48,6 @@ public sealed class ToolsView
         Refresh();
     }
 
-    // ---------------------------------------------------------------- layout
-
     private Control BuildWorkspace()
     {
         var page = new StackPanel { Spacing = 16 };
@@ -58,13 +55,17 @@ public sealed class ToolsView
         page.Children.Add(_hint);
         page.Children.Add(Section("Status",
             Tool("Server status", "Live CPU, memory, network, disks, users, versions", Icons.Info, ShowStatusAsync),
-            Tool("Emulator & wired", "CPU per wired thread and thread group, rooms with slow wired", Icons.Cog, ShowEmulatorMonitorAsync)));
+            Tool("Emulator & wired", "CPU per wired thread and thread group, rooms with slow wired", Icons.Cog, ShowEmulatorMonitorAsync),
+            Tool("SSH terminal", "A shell (command line) on the server, in this window", Icons.Console, ShowTerminalAsync)));
         page.Children.Add(Section("Services",
             Tool("Restart emulator", "Disconnects everyone in the hotel", Icons.History, RestartEmulatorAsync),
             Tool("Restart MariaDB", "The emulator reconnects by itself", Icons.Database, RestartMariaDbAsync),
             Tool("Restart NGINX", "And PHP-FPM (AtomCMS)", Icons.Globe, RestartNginxAsync),
             Tool("Restart Traefik", "The Docker container on 80/443", Icons.Swap, RestartTraefikAsync),
             Tool("Restart all", "MariaDB, emulator, NGINX, Traefik", Icons.Play, RestartAllAsync)));
+        page.Children.Add(Section("Firewall",
+            Tool("Enable firewall", "ufw on: SSH, 80 and 443 only (the Harden step's rules)", Icons.Shield, EnableFirewallAsync),
+            Tool("Disable firewall", "ufw off: every port is reachable again", Icons.Alert, DisableFirewallAsync)));
         page.Children.Add(Section("Database",
             Tool("Create full database backup", "Dump on the server, download to this computer", Icons.Download, BackupDatabaseAsync),
             Tool("Import full database", "Replace the hotel database with a backup", Icons.Folder, ImportDatabaseAsync)));
@@ -174,8 +175,6 @@ public sealed class ToolsView
         return button;
     }
 
-    // ---------------------------------------------------------------- running a tool
-
     private async Task RunToolAsync(string title, Func<Window, ServerConnection, Task> action)
     {
         if (_running || _connection() is not { } connection || TopLevel.GetTopLevel(Workspace) is not Window owner) return;
@@ -215,7 +214,6 @@ public sealed class ToolsView
         Refresh();
     }
 
-    /// <summary>Shows a run panel for the tool under the buttons.</summary>
     private RunPanel StartRun(params string[] checks)
     {
         var run = new RunPanel(300, checks);
@@ -229,7 +227,7 @@ public sealed class ToolsView
         return run;
     }
 
-    // A result without a run (cancelled or refused before anything ran).
+    // For a tool that was cancelled or refused before anything ran.
     private void Show(string title, ResultKind kind, string heading, string message)
     {
         var banner = new ResultBanner();
@@ -269,9 +267,6 @@ public sealed class ToolsView
         };
     }
 
-    // ---------------------------------------------------------------- status
-
-    /// <summary>The live dashboards, each on its own page.</summary>
     public enum Monitor { Server, Emulator }
 
     // Built once; a dashboard samples while it is on screen and stops when its page is left.
@@ -293,6 +288,32 @@ public sealed class ToolsView
         return _monitorPages[monitor] = Card(panel, new Thickness(24, 20));
     }
 
+    private TerminalView? _terminalPage;
+
+    /// <summary>The SSH terminal tile was clicked: the window shows <see cref="TerminalPage"/>.</summary>
+    public event Action? TerminalRequested;
+
+    /// <summary>Built once, so the shell keeps running while other pages are shown.</summary>
+    public TerminalView TerminalPage
+    {
+        get
+        {
+            if (_terminalPage is null)
+            {
+                _terminalPage = new TerminalView(_connection);
+                _terminalPage.BackRequested += () => BackRequested?.Invoke();
+            }
+            return _terminalPage;
+        }
+    }
+
+    private Task ShowTerminalAsync(Window owner, ServerConnection connection)
+    {
+        _run = null;
+        TerminalRequested?.Invoke();
+        return Task.CompletedTask;
+    }
+
     private Task ShowStatusAsync(Window owner, ServerConnection connection) => ShowMonitor(Monitor.Server);
     private Task ShowEmulatorMonitorAsync(Window owner, ServerConnection connection) => ShowMonitor(Monitor.Emulator);
 
@@ -306,8 +327,6 @@ public sealed class ToolsView
     // The result area is under all the buttons: scroll it into view once it has been laid out.
     private void ScrollToResult() =>
         Dispatcher.UIThread.Post(() => (_runHost.Content as Control)?.BringIntoView(), DispatcherPriority.Background);
-
-    // ---------------------------------------------------------------- services
 
     private async Task RestartEmulatorAsync(Window owner, ServerConnection connection)
     {
@@ -343,6 +362,28 @@ public sealed class ToolsView
         await FinishAsync(run, ResultKind.Success, "Traefik is running again", "It answers on ports 80 and 443 again.");
     }
 
+    private async Task EnableFirewallAsync(Window owner, ServerConnection connection)
+    {
+        RunPanel run = StartRun("Enable the firewall");
+        bool fresh = await Task.Run(() => HardenInstaller.EnableFirewallAsync(connection, run.Log));
+        run.Done("active");
+        await FinishAsync(run, ResultKind.Success, "The firewall is on",
+            (fresh ? "The Harden step's rules are set up: " : "The Harden step's rules are active again: ") +
+            $"SSH (port {connection.Login.Port}, rate limited), HTTP and HTTPS (only from Cloudflare when the site uses it) are open; MariaDB and the emulator's ports are closed (HeidiSQL works through an SSH tunnel).");
+    }
+
+    private async Task DisableFirewallAsync(Window owner, ServerConnection connection)
+    {
+        if (!await ConfirmAsync(owner, "Switch the firewall off?",
+                "Every port on the server can be reached from the internet again, also the emulator's own ports (3000, 2096) and anything else that listens. " +
+                "Use it to test a connection problem, and switch it on again afterwards. The rules are kept.", "Disable firewall")) return;
+        RunPanel run = StartRun("Disable the firewall");
+        await Task.Run(() => HardenInstaller.DisableFirewallAsync(connection, run.Log));
+        run.Done("inactive");
+        await FinishAsync(run, ResultKind.Warning, "The firewall is off",
+            "All ports are open. Click Enable firewall to switch the same rules on again.");
+    }
+
     private async Task RestartAllAsync(Window owner, ServerConnection connection)
     {
         if (!await ConfirmAsync(owner, "Restart everything?", "MariaDB, the emulator, NGINX (with PHP-FPM) and Traefik restart one after the other. Everyone in the hotel is disconnected.", "Restart all")) return;
@@ -358,8 +399,6 @@ public sealed class ToolsView
         run.Done("running");
         await FinishAsync(run, ResultKind.Success, "Everything is running again", "MariaDB, the emulator, NGINX and Traefik were restarted.");
     }
-
-    // ---------------------------------------------------------------- database
 
     private async Task BackupDatabaseAsync(Window owner, ServerConnection connection)
     {
@@ -419,8 +458,6 @@ public sealed class ToolsView
             $"{Path.GetFileName(local)} is now the hotel database; the emulator has started with it. The database as it was is in {ServerTools.BackupDirectory}/*-before-import-*.sql.gz.");
     }
 
-    // ---------------------------------------------------------------- updates
-
     private async Task UpdateSystemAsync(Window owner, ServerConnection connection)
     {
         RunPanel run = StartRun("apt-get update, upgrade and dist-upgrade");
@@ -441,6 +478,8 @@ public sealed class ToolsView
         RunPanel run = StartRun("git pull", "build.sh", "Start the new version");
         (string? oldCommit, string? oldVersion) = await Task.Run(() => ServerTools.EmulatorVersionAsync(connection));
         string commit = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, EmulatorInstaller.Repository, run.Log));
+        // New images or badge parts in the emulator's Assets/ go to gamedata (missing files only).
+        await Task.Run(() => EmulatorAssetsInstaller.InstallAsync(connection, run.Log));
         (string? newCommit, _) = await Task.Run(() => ServerTools.EmulatorVersionAsync(connection));
         run.Done(commit);
 
@@ -484,7 +523,7 @@ public sealed class ToolsView
         await Task.Run(() => OctaneInstaller.YarnInstallAsync(connection, OctaneInstaller.Octane, run.Log, fresh: true));
         run.Done("done");
 
-        // Also puts package.json's --base back for AtomCMS (/client/).
+        // Also puts back the /client/ --base in package.json that AtomCMS needs.
         await Task.Run(() => OctaneInstaller.ConfigureAsync(connection, site, run.Log));
         run.Done(site.ClientUrl);
         await Task.Run(() => OctaneInstaller.BuildAsync(connection, site, run.Log));
@@ -494,8 +533,6 @@ public sealed class ToolsView
         await FinishAsync(run, ResultKind.Success, $"Octane is updated on {site.ClientUrl}",
             $"Octane-Renderer {renderer}, Octane {octane}. Players get the new client when they reload the page.");
     }
-
-    // ---------------------------------------------------------------- settings backup
 
     private async Task ExportSettingsAsync(Window owner)
     {

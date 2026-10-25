@@ -22,8 +22,8 @@ public sealed record AtomCmsState(
 }
 
 /// <summary>
-/// Installs AtomCMS (github.com/ObjectRetros/atomcms) as the hotel's website: the CMS takes the site root and
-/// Octane moves to /client/, as in duckietm/Complete-Retro-on-Ubuntu's NGINX_Atom_setup.md.
+/// Installs AtomCMS as the hotel's website. The CMS takes the site root and Octane moves to /client/,
+/// following NGINX_Atom_setup.md in duckietm/Complete-Retro-on-Ubuntu.
 /// </summary>
 public static class AtomCmsInstaller
 {
@@ -31,16 +31,16 @@ public static class AtomCmsInstaller
     public const string Directory = "/var/www/atomcms";
     public const string Public = Directory + "/public";
 
-    // Node.js 26 from /usr/bin; composer and artisan without prompts.
+    // Node.js 26 comes from /usr/bin. Composer and artisan run without prompts.
     private const string Environment =
         "export PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root CI=1 NO_COLOR=1 COMPOSER_ALLOW_SUPERUSER=1 COMPOSER_NO_INTERACTION=1 COMPOSER_PROCESS_TIMEOUT=1800";
 
-    // artisan as the PHP-FPM user, so the caches and logs it writes stay writable for the site.
+    // Run artisan as the PHP-FPM user so the caches and logs it writes stay writable for the site.
     private const string Artisan = "runuser -u www-data -- php artisan";
 
     /// <summary>
-    /// website_settings that point the CMS at this server's layout (also what its web installer asks for);
-    /// rcon_port is copied from the emulator's config.ini.
+    /// website_settings that point the CMS at this server's layout. The rcon_port setting is copied separately
+    /// from the emulator's config.ini.
     /// </summary>
     public static (string Key, string Value)[] WebsiteSettings(string hotelName) =>
     [
@@ -87,7 +87,7 @@ public static class AtomCmsInstaller
             values.Yes("migrated"), values.Yes("site"), values["key"], values["completed"] == "1");
     }
 
-    // A .env value: double quotes, with what phpdotenv would expand or end the string escaped.
+    // Double-quotes a .env value and escapes anything phpdotenv would expand or read as the end of the string.
     private static string EnvValue(string value) =>
         "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("$", "\\$") + "\"";
 
@@ -151,7 +151,7 @@ public static class AtomCmsInstaller
         return RemoteScript.RunAsync(connection, script, log, "Writing AtomCMS' .env failed", token);
     }
 
-    /// <summary>composer install (with the dev packages: the seeder uses Faker for the first article's author).</summary>
+    /// <summary>Runs composer install with dev packages, because the seeder uses Faker for the first article's author.</summary>
     public static Task ComposerInstallAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
@@ -174,8 +174,8 @@ public static class AtomCmsInstaller
     }
 
     /// <summary>
-    /// key:generate (once), storage:link and migrate; on the first install also the seeders and the website
-    /// settings. Returns whether this was the first install.
+    /// Runs key:generate once, storage:link and migrate, plus the seeders and website settings on the first install.
+    /// Returns whether this was the first install.
     /// </summary>
     public static async Task<bool> MigrateAsync(ServerConnection connection, string hotelName,
         Action<string> log, CancellationToken token = default)
@@ -228,8 +228,8 @@ public static class AtomCmsInstaller
     }
 
     /// <summary>
-    /// The key AtomCMS' web installer asks for. AtomCMS creates it on the first visit, so this opens /installation
-    /// through Traefik; if there is still no key, it is added to website_installation directly.
+    /// Gets the key AtomCMS' web installer asks for. AtomCMS creates it on the first visit, so this opens /installation
+    /// through Traefik and inserts a key into website_installation if there is still none.
     /// </summary>
     public static async Task<(string? Key, bool Completed)> InstallationKeyAsync(ServerConnection connection, WebAccessSettings site,
         Action<string> log, CancellationToken token = default)
@@ -241,8 +241,7 @@ public static class AtomCmsInstaller
             db=$(grep -E '^DB_DATABASE=' .env | cut -d= -f2)
             key() { mariadb -N "$db" -e "SELECT installation_key FROM website_installation ORDER BY id LIMIT 1" 2>/dev/null; }
             url="{{site.Scheme}}://{{name}}"
-            # AtomCMS remembers "installed" in its cache; without a finished installation in the database that
-            # would hide the web installer.
+            # A cached "installed" flag would hide the web installer while the database has no finished installation.
             if ! mariadb -N "$db" -e "SELECT 1 FROM website_installation WHERE completed = 1" 2>/dev/null | grep -q 1; then
               {{Artisan}} cache:forget app_installed >/dev/null 2>&1 || true
               {{Artisan}} cache:forget installation_record >/dev/null 2>&1 || true
@@ -276,7 +275,7 @@ public static class AtomCmsInstaller
         return (result["KEY"], result["COMPLETED"] == "1");
     }
 
-    /// <summary>npm ci (package-lock.json) and npm run build:atom, which also builds the housekeeping theme.</summary>
+    /// <summary>Runs npm ci and npm run build:atom, which also builds the housekeeping theme.</summary>
     public static Task BuildThemeAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
@@ -299,9 +298,7 @@ public static class AtomCmsInstaller
         return RemoteScript.RunAsync(connection, script, log, "Building the AtomCMS theme failed", token);
     }
 
-    /// <summary>
-    /// Through Traefik: AtomCMS on the site, Octane on /client/, Polaris on /api/health and AtomCMS' own /api.
-    /// </summary>
+    /// <summary>Checks through Traefik that the site, /client/, AtomCMS' /api and Polaris' /api/health answer.</summary>
     public static Task TestAsync(ServerConnection connection, WebAccessSettings site, Action<string> log, CancellationToken token = default)
     {
         string name = site.IsIpAddress ? "127.0.0.1" : site.Address;

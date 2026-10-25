@@ -12,7 +12,6 @@ public enum ExistingKeysChoice { Replace, Add, Abort }
 /// <summary>authorized_keys already holds keys: replace them, add the new key, or abort (also on close).</summary>
 public static class ExistingKeysDialog
 {
-    private static readonly FontFamily Mono = new("Cascadia Mono, Consolas, DejaVu Sans Mono, monospace");
 
     public static async Task<ExistingKeysChoice> ShowAsync(Window owner, IReadOnlyList<AuthorizedKey> existing, AuthorizedKey newKey)
     {

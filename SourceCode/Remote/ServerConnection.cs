@@ -3,13 +3,13 @@ using Renci.SshNet.Common;
 
 namespace AllInOneInstaller.Remote;
 
-/// <summary>A password login, or with <paramref name="PrivateKeys"/> a key login (the addons log in as root with the saved keys).</summary>
+/// <summary>A password login, or a key login when <paramref name="PrivateKeys"/> is set. The addons log in as root with the saved keys.</summary>
 public sealed record ServerLogin(string Host, int Port, string User, string Password, IReadOnlyList<string>? PrivateKeys = null,
     string KeyPassphrase = "")
 {
     public bool UsesKey => PrivateKeys is { Count: > 0 };
 
-    /// <summary>Parses "host", "host:port" or "[ipv6]:port"; the port defaults to 22.</summary>
+    /// <summary>Parses "host", "host:port" or "[ipv6]:port". The port defaults to 22.</summary>
     public static (string Host, int Port) ParseHost(string text)
     {
         text = text.Trim();
@@ -73,7 +73,7 @@ public sealed class ServerConnection : IAsyncDisposable
             Timeout = TimeSpan.FromSeconds(20)
         };
         _info = info;
-        // Installs run for minutes; keep-alives stop routers and firewalls from dropping an idle-looking session.
+        // Installs run for minutes, and keep-alives stop routers and firewalls from dropping an idle-looking session.
         _client = new SshClient(info) { KeepAliveInterval = TimeSpan.FromSeconds(30) };
         _client.HostKeyReceived += (_, e) =>
         {
@@ -196,6 +196,9 @@ public sealed class ServerConnection : IAsyncDisposable
             return;
         }
 
+        if (_login.UsesKey)
+            throw new ServerConnectionException(
+                $"'{LoginUser}' logged in with the SSH key, but sudo asks for a password. Log in as root with the key, allow sudo without a password for '{LoginUser}', or log in with the password instead.");
         CommandResult result = await RunAsync("sudo -S -p '' -k id -u", token, _login.Password + "\n");
         if (!result.Succeeded || result.Output.Trim() != "0")
         {
@@ -209,7 +212,7 @@ public sealed class ServerConnection : IAsyncDisposable
     }
 
     /// <summary>
-    /// Copies a file from the server over SFTP, as the login user (the tools log in as root).
+    /// Copies a file from the server over SFTP as the login user, which is root for the tools.
     /// <paramref name="progress"/> gets the bytes copied so far.
     /// </summary>
     public Task DownloadAsync(string remotePath, string localPath, Action<ulong>? progress = null, CancellationToken token = default) =>
@@ -220,7 +223,38 @@ public sealed class ServerConnection : IAsyncDisposable
             sftp.DownloadFile(remotePath, file, bytes => progress?.Invoke(bytes));
         }, token);
 
-    /// <summary>Copies a local file to the server over SFTP.</summary>
+    /// <summary>
+    /// Downloads several files over one SFTP session and creates the local folders as needed.
+    /// <paramref name="progress"/> gets the bytes of all files copied so far.
+    /// </summary>
+    public Task DownloadFilesAsync(IReadOnlyList<(string Remote, string Local)> files, Action<long>? progress = null, CancellationToken token = default) =>
+        Task.Run(() =>
+        {
+            using SftpClient sftp = OpenSftp();
+            long done = 0;
+            foreach ((string remote, string local) in files)
+            {
+                token.ThrowIfCancellationRequested();
+                Directory.CreateDirectory(Path.GetDirectoryName(local)!);
+                long before = done;
+                using (FileStream file = File.Create(local))
+                    sftp.DownloadFile(remote, file, bytes => progress?.Invoke(before + (long)bytes));
+                done = before + new FileInfo(local).Length;
+                progress?.Invoke(done);
+            }
+        }, token);
+
+    /// <summary>Reads a small file into memory, or returns null when it is larger than <paramref name="maxBytes"/>.</summary>
+    public Task<byte[]?> ReadFileAsync(string remotePath, long maxBytes, CancellationToken token = default) =>
+        Task.Run(() =>
+        {
+            using SftpClient sftp = OpenSftp();
+            if (sftp.GetAttributes(remotePath).Size > maxBytes) return null;
+            using var memory = new MemoryStream();
+            sftp.DownloadFile(remotePath, memory);
+            return (byte[]?)memory.ToArray();
+        }, token);
+
     public Task UploadAsync(string localPath, string remotePath, Action<ulong>? progress = null, CancellationToken token = default) =>
         Task.Run(() =>
         {
@@ -228,6 +262,10 @@ public sealed class ServerConnection : IAsyncDisposable
             using FileStream file = File.OpenRead(localPath);
             sftp.UploadFile(file, remotePath, bytes => progress?.Invoke(bytes));
         }, token);
+
+    /// <summary>An interactive xterm-256color shell of this size as the logged-in user.</summary>
+    public ShellStream OpenShell(int columns, int rows) =>
+        _client.CreateShellStream("xterm-256color", (uint)columns, (uint)rows, 0, 0, 1 << 16);
 
     private SftpClient OpenSftp()
     {
@@ -268,7 +306,7 @@ public sealed class ServerConnection : IAsyncDisposable
         string? stdin = null)
     {
         (string commandLine, string? input) = RootCommandLine("exec 2>&1\n" + script);
-        // sudo -S reads only the password line; everything after it reaches the script.
+        // sudo -S reads only the password line, so everything after it reaches the script.
         if (stdin is not null) input = (input ?? "") + stdin;
         using SshCommand ssh = _client.CreateCommand(commandLine.ReplaceLineEndings("\n"));
         Task execution = ssh.ExecuteAsync(token);
@@ -284,9 +322,35 @@ public sealed class ServerConnection : IAsyncDisposable
         }, token);
         await execution;
         await reading;
-        // Only sudo itself can still write to stderr; the script's stderr is redirected.
+        // Only sudo itself can still write to stderr, since the script's stderr is redirected.
         foreach (string line in ssh.Error.Split('\n', StringSplitOptions.RemoveEmptyEntries)) onLine(line.TrimEnd('\r'));
         return ssh.ExitStatus ?? -1;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="script"/> as root with stdin written by <paramref name="writeInput"/>, such as a tar archive
+    /// for tar -x. Stdin closes when <paramref name="writeInput"/> returns.
+    /// </summary>
+    public async Task<CommandResult> RunAsRootWithInputAsync(string script, Func<Stream, CancellationToken, Task> writeInput,
+        CancellationToken token = default)
+    {
+        (string commandLine, string? password) = RootCommandLine("exec 2>&1\n" + script);
+        using SshCommand ssh = _client.CreateCommand(commandLine.ReplaceLineEndings("\n"));
+        Task execution = ssh.ExecuteAsync(token);
+        Task<string> reading = Task.Run(async () =>
+        {
+            using var reader = new StreamReader(ssh.OutputStream, System.Text.Encoding.UTF8);
+            return await reader.ReadToEndAsync(token);
+        }, token);
+        await using (Stream input = ssh.CreateInputStream())
+        {
+            // sudo -S reads only the password line, so the rest reaches the script.
+            if (password is not null) await input.WriteAsync(System.Text.Encoding.UTF8.GetBytes(password), token);
+            await writeInput(input, token);
+        }
+        await execution;
+        string output = await reading;
+        return new CommandResult(ssh.ExitStatus ?? -1, output, ssh.Error);
     }
 
     private (string CommandLine, string? Input) RootCommandLine(string command)

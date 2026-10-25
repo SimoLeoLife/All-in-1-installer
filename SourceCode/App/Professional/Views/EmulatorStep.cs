@@ -14,7 +14,7 @@ public sealed class EmulatorStep : InstallStep
 
     private const string DefaultTimezone = "Europe/Amsterdam";
 
-    // Typing the first letters (e.g. "Europe/Am") jumps to the zone.
+    // Typing the first letters, like "Europe/Am", jumps to the zone.
     private readonly ComboBox _timezone = new() { MinWidth = 340, MaxDropDownHeight = 340, IsTextSearchEnabled = true };
     private readonly ComboBox _memory = new()
     {

@@ -30,7 +30,7 @@ public static class NginxInstaller
     // Published by nginx.org for verifying nginx_signing.key.
     public const string PrimaryKeyFingerprint = "573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62";
 
-    // Every key currently in nginx_signing.key; any other key is refused.
+    // Every key currently in nginx_signing.key. Any other key is refused.
     private static readonly string[] KnownKeyFingerprints =
     [
         PrimaryKeyFingerprint,
@@ -119,7 +119,7 @@ public static class NginxInstaller
         string script = RemoteScript.Prelude + """
 
             echo "> apt-get install nginx"
-            # confold: an upgrade keeps your own changes to nginx.conf
+            # confold keeps local changes to nginx.conf on an upgrade.
             apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold nginx
             version=$(dpkg-query -W -f='${Version}' nginx)
             case "$version" in *"~$codename"*) ;; *) fail "Installed nginx $version does not come from nginx.org." ;; esac

@@ -19,7 +19,7 @@ public static class ClientConfiguration
         return path;
     }
 
-    /// <summary>Returns the private key path; the public and PuTTY keys get ".pub" and ".ppk" appended.</summary>
+    /// <summary>Returns the private key path. The public and PuTTY keys are saved next to it as .pub and .ppk.</summary>
     public static string SaveKeyPair(string host, SshKeyPair pair)
     {
         string path = FreePath(KeysDirectory(host), pair.FileName, ".pub");
@@ -64,6 +64,29 @@ public static class ClientConfiguration
             .Where(path => Path.GetExtension(path) is not (".pub" or ".ppk") && File.Exists(path + ".pub"))
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .ToList();
+    }
+
+    /// <summary>Every private key in configuration/keys (all servers), newest first.</summary>
+    public static List<string> AllPrivateKeys()
+    {
+        string keys = Path.Combine(Directory, "keys");
+        if (!System.IO.Directory.Exists(keys)) return [];
+        return System.IO.Directory.GetFiles(keys, "*", SearchOption.AllDirectories)
+            .Where(path => Path.GetExtension(path) is not (".pub" or ".ppk") && File.Exists(path + ".pub"))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .ToList();
+    }
+
+    /// <summary>Stores an imported private key and its .pub under keys/&lt;folder&gt; without overwriting existing files.</summary>
+    public static string SaveImportedKey(string folder, string privateKeyText, AuthorizedKey publicKey)
+    {
+        string name = "imported_" + publicKey.Type.Split('@')[0].Replace("ssh-", "").Replace("ecdsa-sha2-", "ecdsa-");
+        string path = FreePath(KeysDirectory(folder), name, ".pub");
+        File.WriteAllText(path, "");
+        RestrictToOwner(path, directory: false);
+        File.WriteAllText(path, privateKeyText.ReplaceLineEndings("\n").TrimEnd() + "\n");
+        File.WriteAllText(path + ".pub", publicKey.Line + "\n");
+        return path;
     }
 
     public static string DatabaseCredentialsPath(string host)

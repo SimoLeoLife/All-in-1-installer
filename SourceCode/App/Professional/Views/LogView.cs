@@ -9,13 +9,9 @@ using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 
 namespace AllInOneInstaller.App.Professional.Views;
 
-/// <summary>
-/// Virtualized log: only visible lines are laid out, so thousands of lines keep the window responsive.
-/// Follows new output unless the user scrolled up.
-/// </summary>
+/// <summary>Virtualized log list that follows new output unless the user has scrolled up.</summary>
 public sealed class LogView : Border
 {
-    private static readonly FontFamily Mono = new("Cascadia Mono, Consolas, DejaVu Sans Mono, monospace");
     private readonly AvaloniaList<string> _lines;
     private readonly ListBox _list;
     private readonly TextBlock _placeholder;
@@ -54,7 +50,7 @@ public sealed class LogView : Border
         _list.Resources["SystemControlHighlightListAccentLowBrush"] = Solid(Color.Parse("#334F5FE6"));
         _list.Resources["SystemControlHighlightListAccentMediumBrush"] = Solid(Color.Parse("#444F5FE6"));
         _list.Resources["SystemControlHighlightListAccentHighBrush"] = Solid(Color.Parse("#554F5FE6"));
-        // Only the user stops following: wheel up, dragging the scroll bar, or keys that move up.
+        // Only user input stops following. The scroll bar drag case is handled in AttachScroll.
         _list.AddHandler(PointerWheelChangedEvent, (_, e) => { if (e.Delta.Y > 0) _follow = false; }, Avalonia.Interactivity.RoutingStrategies.Tunnel);
         _list.AddHandler(PointerPressedEvent, (_, _) => _pointerDown = true, Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
         _list.AddHandler(PointerReleasedEvent, (_, _) => _pointerDown = false, Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
@@ -84,11 +80,10 @@ public sealed class LogView : Border
         Child = grid;
     }
 
-    /// <summary>Scrolls to the newest line unless the user scrolled up.</summary>
     public void FollowOutput()
     {
         if (!_follow || _lines.Count == 0 || _scrollPending) return;
-        // After layout, so wrapped lines are measured; output that fits stays at the top.
+        // Scroll after layout so wrapped lines are measured first.
         _scrollPending = true;
         Avalonia.Threading.Dispatcher.UIThread.Post(() =>
         {
@@ -98,7 +93,7 @@ public sealed class LogView : Border
         }, Avalonia.Threading.DispatcherPriority.Background);
     }
 
-    /// <summary>Copies the selected lines, or all, to the clipboard; returns the line count.</summary>
+    /// <summary>Copies the selected lines, or all lines, and returns how many were copied.</summary>
     public async Task<int> CopyAsync(bool selectedOnly)
     {
         IClipboard? clipboard = TopLevel.GetTopLevel(this)?.Clipboard;
@@ -126,11 +121,10 @@ public sealed class LogView : Border
         _scroll.ScrollChanged += (_, e) =>
         {
             bool atEnd = _scroll.Offset.Y >= _scroll.Extent.Height - _scroll.Viewport.Height - 24;
-            // Scrolling back to the bottom resumes following. Moving up only counts while the user drags the
-            // scroll bar: the list itself also scrolls while it measures newly added (wrapped) lines.
+            // Scrolling up only counts while the pointer is down, because the list also shifts on its own
+            // while it measures newly added wrapped lines.
             if (atEnd) _follow = true;
             else if (_pointerDown && e.OffsetDelta.Y < 0) _follow = false;
-            // New lines grew the list while following: stay at the end.
             if (_follow && !atEnd && e.ExtentDelta.Y > 0) FollowOutput();
         };
     }

@@ -51,12 +51,20 @@ From the dashboard or the sidebar, click **Install New Server**. The installer t
 
 1. **Server IP / Hostname**: e.g. `192.168.1.10` or `hotel.example.com`. Add `:2222` for a
    different SSH port (`[::1]:2222` for IPv6).
-2. **User account**: `root`, or a user with sudo rights.
-3. **Password**
+2. **User account and login**: `root`, or a user with sudo rights, and how to log in:
+   - **Password**, or
+   - **My own SSH key**, for servers that were deployed with a key (no password needed). The user of a cloud image
+     (`ubuntu`, `debian` ...) needs sudo without a password.
+3. **Password**, or with an SSH key: **the private key** (from `configuration/keys`, or **Browse** for an OpenSSH /
+   PEM / PuTTY `.ppk` file) and its password. The key is checked on this computer before connecting; it never leaves it.
+
+With a default server and key in **Settings**, these are filled in.
+
+![Login method](docs/screenshots/login-method.png)
 
 Then it:
 
-- logs in over SSH (password or keyboard-interactive / PAM),
+- logs in over SSH (password, keyboard-interactive / PAM, or the SSH key),
 - reads `/etc/os-release` and refuses anything that is not Ubuntu or Debian,
 - switches to root when the user is not root:
   - passwordless sudo (`NOPASSWD`) is detected and used,
@@ -527,6 +535,26 @@ Nothing to fill in.
 5. **Log in again**: a new SSH login through the firewall proves you are not locked out (the current session stays
    open; if it fails, the step says so and `ufw disable` undoes it).
 
+**Step 14 – SSH login: keys only (optional)**
+
+After Harden. You choose: **Keep password login** (changes nothing, or allows passwords again), or **Turn password
+login off: only SSH keys can log in**. A warning says what that means: lose your key and the only way in is the
+console of your hosting provider (KVM / VNC / rescue). You have to tick that you understand it. With keys only, the
+step:
+
+1. checks that one of your keys on this computer is in root's `authorized_keys` (the SSH key step puts it there),
+2. logs in as root with the key in a separate session (the key password goes in the field): when that fails, nothing changes,
+3. writes `/etc/ssh/sshd_config.d/00-all-in-1-keys-only.conf` (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`,
+   `PermitRootLogin prohibit-password`); it makes sure `sshd_config` includes `sshd_config.d`, checks with `sshd -t`, reloads sshd
+   (open sessions stay connected) and checks the effective values with `sshd -T`,
+4. logs in with the key again; when that fails, password login is put back automatically. A password login is tried
+   as well, and should now be refused.
+
+To allow passwords again: run the step with **Keep password login**, or delete that file on the server console and
+reload ssh.
+
+![SSH login step](docs/screenshots/ssh-login-step.png)
+
 **Completed – upload the assets** (done)
 
 After the last step (done or skipped) the wizard shows **Successfully completed** (or *Completed, with steps to look
@@ -580,6 +608,7 @@ Every install step first checks the server and shows what it found:
 | Emulator | JDK 25, the `emulator` account, a built JAR, `config.ini`, and the emulator running | **Skip (already installed)** · Rebuild and restart |
 | Web access | Docker from download.docker.com running, the Traefik container running, the hotel site on 127.0.0.1:85 | **Skip (already installed)** · Set up again |
 | Harden | ufw active with deny incoming and no 3306 rule, the TCP settings in `/etc/sysctl.conf`, `ws.whitelist` = the hotel's address and `ws.ip.header` = `X-Forwarded-For` | **Skip (already installed)** · Apply again |
+| SSH login | sshd -T says no password and no keyboard-interactive login | **Skip (already installed)** · Apply again |
 | Octane | `dist/` built and served, `/var/www/gamedata` exists, `socket.url` matches the web access address, the camera URLs are set (ui-config and emulator) and `plainConfigBaseUrl` matches the layout (`/configuration/`, or `/client/configuration/` with AtomCMS) | **Skip (already installed)** · Configure and rebuild |
 | AtomCMS (addon) | `vendor/` and the atom theme are built, AtomCMS' tables exist, the hotel site's root is `/var/www/atomcms/public` and `hotel.env` has `CMS=atom` | **Skip (already installed)** · Update and rebuild |
 
@@ -597,10 +626,11 @@ A new step is a class derived from `InstallStep`, added to `ServerWizard.ServerS
 ## Addons
 
 The sidebar has an **ADDONS** section for things that go on top of a finished server installation.
-An addon asks only for the server and the SSH key's password: it logs in as **root with the SSH key** that
-Install New Server saved in `configuration/keys/<server>/` (no account, no password, no SSH key step). Leave the
-key password empty when the key has none. Without a saved key for that server, it asks you to run Install New
-Server (its SSH key step) from this computer first.
+An addon (and Tools) asks only for the server and **your SSH key**: it logs in as **root with that key** (no account,
+no password, no SSH key step). The list holds every private key in `configuration/keys` (OpenSSH, PEM or PuTTY
+`.ppk`); selected is the default key from Settings, or else a key in a folder named after the server
+(`keys/192.168.0.8`, or one that contains it, like `keys/Server-192.168.0.8`). **Browse** picks another file. Leave the
+key password empty when the key has none; it is checked on this computer before connecting.
 
 ![Addon login with the saved SSH key](docs/screenshots/addon-key-login.png)
 
@@ -666,6 +696,133 @@ Captcha keys (Turnstile / reCAPTCHA) go in `/var/www/atomcms/.env`. To update At
 
 ![AtomCMS completed](docs/screenshots/atomcms-completed.png)
 
+### Deploy Assets
+
+**Deploy Assets** copies what the [All-in-1 downloader](https://github.com/duckietm/all-in-1-converter) downloaded to
+`/var/www/gamedata` on the server, where Octane loads it. Set the downloader's executable in **Settings** first: its
+folder holds `Habbo_Default`.
+
+![Deploy Assets](docs/screenshots/deploy-assets.png)
+
+The step compares every folder with the server (name, size and date) and lists what is new or changed; untick a folder
+to leave it out. Only those files are sent, per folder as one tar stream over the SSH connection (no FTP, no temporary
+files), and they keep their dates, so the next sync sends only what was downloaded since. Nothing on the server is
+deleted: your own furniture, badges and the emulator's files stay. Before uploading it checks the free disk space;
+afterwards `gamedata-permissions` gives the emulator and NGINX access again.
+
+| Downloader (`Habbo_Default/...`) | Server (`/var/www/gamedata/...`) |
+|---|---|
+| `hof_furni/hab/*.hab` | `furniture` |
+| `hof_furni/icons/*.png` | `icons` |
+| `clothes/hab/*.hab` | `clothes` |
+| `effects/hab/*.hab` | `effect` |
+| `pets/hab/*.hab` | `pets` |
+| `badges` | `c_images/album1584` |
+| `icons/*.png` | `c_images/catalogue` |
+| `fx_icons/*.png` | `c_images/fx_icons` |
+| `quests` | `c_images/Quests` |
+| `reception` / `reception/web_promo_small` | `c_images/reception` / `c_images/web_promo_small` |
+| `mp3/*.mp3` | `sounds` |
+| `files/json`: FurnitureData, ProductData, FigureData, FigureMap, EffectMap, HabboAvatarActions, ExternalTexts | `config` |
+
+The config JSON files are only added when they are missing: hotels and the emulator edit them (custom furniture,
+badge texts). Tick **Also replace config JSON files** to overwrite them with the downloader's. New furniture also needs
+its rows in `items_base` and `catalog_items`: make the SQL with the All-in-1 converter (Hotel Tools → Generate SQL).
+
+![Deploy Assets done](docs/screenshots/deploy-assets-done.png)
+
+#### UI texts
+
+The second step of Deploy Assets installs the client's own interface texts (buttons, windows, messages). Octane's
+`renderer-config.json` loads them from `${gamedata.url}/config/UITexts.jsonc`, and Octane ships them per language in
+[public/configuration](https://github.com/duckietm/Octane/tree/main/public/configuration) as
+`UITexts_<language>.jsonc.example` (ar, de, en, es, fr, it, nl).
+
+Choose the language; the step copies `UITexts_<language>.jsonc.example` from the Octane clone on the server
+(`/var/www/Octane/public/configuration`), or downloads it from GitHub when there is no clone, to
+`/var/www/gamedata/config/UITexts.jsonc` (owner www-data). It shows which language is installed now. A
+`UITexts.jsonc` that matches none of Octane's languages (your own edits) is kept as `UITexts.jsonc.bak-<time>` first.
+Skip either step to run only the other one.
+
+![Deploy Assets: UI texts](docs/screenshots/deploy-ui-texts.png)
+
+#### Images (emulator assets)
+
+The third step puts the client images and group badge parts that the Habbo downloads do not have into gamedata. Polaris
+ships them in its repository (`/var/www/emulator/Assets`), and the installer has a copy in `Assets/` next to its
+executable (from `Assets/` in this repository; put extra images of your own there too):
+
+| `Assets/...` | Server (`/var/www/gamedata/...`) | Used by |
+|---|---|---|
+| `images` | `images` | Octane: the preload images `loading_icon.png`, `clear_icon.png`, `big_arrow.png`, the wallet icons, navigator and catalogue extras |
+| `images/reception/*.png` | `c_images/reception` | Octane's hotel view (`stretch_blue`, `sun`, `drape`, `ts`, `US_right`, `US_top_right` in ui-config) |
+| `badgeparts/badgepart_*.png` | `c_images/groupbadge/badgeparts` | group badges: Octane (`badge.asset.grouparts.url`) and the emulator's badge imager (`imager.location.badgeparts`) |
+| `c_images/...` (talent, habboway, snowstorm_client) | `c_images/...` | Octane's image library (`image.library.url`): talent track, Habbo Way, SnowStorm |
+| any other folder `X` in the installer's `Assets/` | `X` | added to the installer's `Assets/` = uploaded to the same path, no code change needed |
+
+Files the Polaris clone has are copied on the server itself; the rest is uploaded from the installer. Only missing files
+are added, so images you changed stay. Without the preload images Octane does not start: it drops the SSO ticket it got
+from the CMS and logs in with an empty one, and the emulator logs `Client is trying to connect with an invalid SSO
+ticket!` for every login (the browser console shows the file: `Initialization failed — falling back to login`). The
+Octane step of Install New Server does this too, and Tools → Update emulator after every pull; run this step for a
+server installed before that.
+
+![Deploy Assets: emulator images](docs/screenshots/deploy-emulator-assets.png)
+
+### Asset Explorer
+
+A two-pane file manager in the style of Norton Commander, for everything in `/var/www/gamedata`. It logs in like the
+other addons (root with your SSH key); then the page shows **this computer** on the left (the drives C:, D: … on
+Windows, `/` and your home folder on Linux) and the **server** on the right, **locked to `/var/www/gamedata`** and the
+folders in it: there is no way above it.
+
+![Asset Explorer](docs/screenshots/asset-explorer.png)
+
+| Key | |
+|---|---|
+| **Tab** | switch between the panes (the active one has a coloured border) |
+| **Enter** / double-click | open a folder (`..` goes up) |
+| **Backspace** | up one folder (on the server not above gamedata) |
+| **F5** | copy the selection to the other pane: **Upload →** from the left, **← Download** from the right; folders with everything in them |
+| **F6** / F2 | rename |
+| **F7** | new folder |
+| **F8** / Delete | delete (asks first) |
+| **Ctrl+R** | refresh both panes |
+| Ctrl/Shift+click, Ctrl+A | select more files |
+| **Drag and drop** | drag files or folders to the other pane (upload or download); drop on a folder row to copy into that folder. Files and folders from Windows Explorer / your desktop can be dropped on the server pane to upload them, and files from the left pane can be dragged out to Explorer or the desktop |
+
+- **Rights:** everything that is uploaded or created on the server gets owner `www-data:www-data`, folders `2775`
+  and files `664`, so NGINX serves it and the emulator (group www-data) can change it.
+- **Already there:** when a file or folder exists on the other side, it asks: replace, keep the existing files (copy
+  only what is missing), or cancel.
+- **Preview:** selecting an image (png, gif, jpg …) on either side shows it with its size in pixels.
+- **Locked to gamedata:** every server action checks the path twice: the installer refuses `..` and separators in
+  names, and the script on the server resolves the real path (`realpath`, which follows symlinks) and stops when it
+  is not in `/var/www/gamedata`, so a symlink in gamedata that points elsewhere cannot be opened, written or deleted
+  through it. gamedata itself cannot be renamed or deleted.
+- Uploads go as one tar stream over the SSH connection (like Deploy Assets), downloads over SFTP; the progress and
+  speed are shown under the panes.
+
+## Settings
+
+**Settings** (sidebar, under GENERAL):
+
+- **Default server** and **SSH key**: Install New Server, the addons and Tools fill in the server; the key is selected
+  for "My own SSH key" (which is then chosen) and is tried first by the addons and Tools. Stored in
+  `configuration/settings.json`, so the encrypted settings backup takes it along.
+- **SSH keys**: every key in `configuration/keys`, and **Import a key** for a server: a key file, or paste it. A private
+  key (OpenSSH, PEM or PuTTY `.ppk`; it asks for the key's password once to read its public key) is stored as
+  `keys/<server>/imported_<type>` with its `.pub`, still protected by its own password. A public key alone is stored as
+  `provided_<type>.pub`, for the SSH key step to install for root.
+
+![Settings](docs/screenshots/settings-keys.png)
+
+- **All-in-1 downloader**: the path of the downloader's executable (`Habbo Downloader.exe`, or the Linux binary).
+  Deploy Assets takes the files from the `Habbo_Default` folder next to it; the card shows how many furniture bundles
+  it found.
+
+![Settings: All-in-1 downloader](docs/screenshots/settings-downloader.png)
+
 ## Tools
 
 The sidebar's **TOOLS** section is for running the hotel. The page shows the login at the top, the server tools
@@ -678,15 +835,18 @@ the server address and the SSH key's password, then root with the saved key.
 |---|---|
 | **Server status** | opens a page with only the live dashboard (**Back to the tools** at the bottom, or click **Tools** in the sidebar), refreshed every 2 seconds while it is on screen: CPU (with load and cores), memory (and swap), network in/out with a graph that scales between B/s, KB/s and MB/s, uptime, emulator running and players online, disks with how full they are, the users logged in on the server (`who`), and the git branch, commit, date and last change of the emulator, Octane, Octane-Renderer (and AtomCMS), with the emulator's JAR version and the Octane / Renderer package versions. Everything is read from `/proc` in one short command per sample; nothing is installed on the server |
 | **Emulator & wired** | a live page about the emulator itself, without changing it: its CPU (% of one core and of the server), JVM memory against `-Xmx`, threads and uptime; the CPU of every wired thread (the coordinator that ticks every 50 ms, shards 0–5 that run the rooms' wired, and the heavy-rooms worker); where the emulator's CPU goes per thread group (wired, game logic, game connections, database, garbage collector, JIT, logging, RCON); and the rooms in the log's `Slow wired task: shard=, room=, took=ms` and "wired tasks waiting" warnings since the last start, with room names, slowest and total time, and the latest warnings. CPU comes from `/proc/<pid>/task/*/stat`; the full thread names from `jcmd Thread.print`, read only when new threads appear (a thread dump briefly pauses the JVM) |
+| **SSH terminal** | a command line on the server in the window, as the Tools login (root with your key): an xterm-compatible terminal (256 colours and truecolor, UTF-8, the alternate screen), so full-screen programs like `nano`, `vim` and `top` work. The terminal follows the window's size, keeps 5,000 lines of scrollback (wheel or Shift+PgUp), and selecting with the mouse + **Ctrl+Shift+C** copies; **Ctrl+Shift+V**, Shift+Insert or the middle button pastes (bracketed, so a pasted script does not run line by line); right-click has Copy / Paste / Select all / Clear scrollback; Ctrl + / − or **A− / A+** change the text size. The session keeps running while you look at other pages; `exit` ends it, **New session** starts another. Under it is the `ssh` command for an SSH client of your own (OpenSSH needs the key in OpenSSH format, PuTTY the `.ppk`) |
 | **Restart emulator** | `systemctl restart emulator` and waits until Polaris has loaded (asks first: everyone is disconnected) |
 | **Restart MariaDB** | restarts MariaDB and waits until it answers |
 | **Restart NGINX** | `nginx -t` first (a broken configuration is not restarted), then PHP-FPM 8.5 and NGINX; checks 127.0.0.1:85 |
 | **Restart Traefik** | `docker restart traefik`; waits for port 80 |
 | **Restart all** | MariaDB, emulator, NGINX + PHP-FPM, Traefik, in that order |
+| **Enable firewall** | switches ufw on with the Harden step's rules: when that step set them up they are switched on again, after checking that every SSH port (and the one you are connected on) is in them, so you cannot lock yourself out; on a server where it never ran, the same rules are set up (SSH rate limited, 80/443 for everyone or only Cloudflare's ranges, everything else closed) |
+| **Disable firewall** | `ufw disable` (asks first: every port is reachable again, also the emulator's 3000 and 2096). The rules are kept, so Enable firewall switches the same rules on again; for testing a connection problem |
 | **Create full database backup** | `mariadb-dump --single-transaction --routines --triggers --events` of the hotel database into `/var/backups/all-in-1/<db>-<time>.sql.gz` (root only; the newest 10 are kept), then downloads it over SFTP to a file you choose (owner-only on Linux/macOS) |
 | **Import full database** | uploads a `.sql` or `.sql.gz`, makes a safety backup (`<db>-before-import-<time>.sql.gz`), stops the emulator, recreates the database with its character set and imports (database names in `CREATE DATABASE` / `USE` lines become the hotel's), clears AtomCMS' cache, and starts the emulator, which updates the database to its version. A file that is not a SQL dump is refused before anything changes |
 | **Update system** | `apt-get update`, `upgrade` and `dist-upgrade` (changed configuration files are kept); says when a reboot is needed |
-| **Update emulator** | `git pull` in `/var/www/emulator`; when there are new commits: `build.sh` and a restart. The start script runs the newest `target/*-jar-with-dependencies.jar`, so a new version number is picked up by itself; the result shows old → new version. No new commits: nothing is rebuilt or restarted |
+| **Update emulator** | `git pull` in `/var/www/emulator` and the missing files of its `Assets/` copied into gamedata (see Deploy Assets → Images); when there are new commits: `build.sh` and a restart. The start script runs the newest `target/*-jar-with-dependencies.jar`, so a new version number is picked up by itself; the result shows old → new version. No new commits: nothing is rebuilt or restarted |
 | **Update Octane** | `git pull` of Octane-Renderer and Octane, then in both `rm -rf node_modules yarn.lock` and `yarn install`, then the configuration for the site (keeps AtomCMS' `/client` layout), `yarn build` and a test. The next pull puts the repository's `yarn.lock` back first |
 
 **Settings backup** (no server needed): **Export encrypted settings** writes the whole configuration directory
@@ -702,6 +862,10 @@ password or a damaged file changes nothing.
 ![Emulator & wired](docs/screenshots/emulator-wired.png)
 
 ![Emulator & wired: slow wired rooms](docs/screenshots/emulator-wired-rooms.png)
+
+![SSH terminal](docs/screenshots/tools-terminal.png)
+
+![Enable firewall](docs/screenshots/tools-firewall.png)
 
 ![Restart all](docs/screenshots/tools-restart-all.png)
 
@@ -727,6 +891,7 @@ server itself needs no GUI.
 ## Project layout
 
 ```
+Assets/                                   Client images shipped next to the executable (Deploy Assets → Images)
 SourceCode/
   Program.cs                              Avalonia entry point
   App/Gui/AvaloniaApp.cs                  Fluent theme + Professional theme
@@ -746,7 +911,15 @@ SourceCode/
   App/Professional/Views/OctaneStep.cs    Octane page
   App/Professional/Views/HardenStep.cs    Harden page
   App/Professional/Views/AtomCmsStep.cs   AtomCMS addon page
+  App/Professional/Views/AssetSyncStep.cs Deploy Assets page (sync from the All-in-1 downloader)
+  App/Professional/Views/UiTextsStep.cs   Deploy Assets page: the client's UI texts (UITexts.jsonc) in a language
+  App/Professional/Views/EmulatorAssetsStep.cs  Deploy Assets page: Polaris' images and group badge parts into gamedata
+  App/Professional/Views/AssetExplorerView.cs   Asset Explorer: two panes (this computer, gamedata), keys, preview, transfers
+  App/Professional/Views/NameDialog.cs    Asks for a file or folder name (rename, new folder)
   App/Professional/Views/ToolsView.cs     Tools page: server tools and the settings backup
+  App/Professional/Views/TerminalView.cs  SSH terminal page (toolbar, terminal, ssh command)
+  App/Professional/Views/SettingsView.cs  Settings page: default server and key, importing SSH keys, downloader path
+  App/Professional/Views/SshLoginStep.cs  SSH login page (keys only, optional)
   App/Professional/Views/ServerStatusView.cs  Live server dashboard (Server status)
   App/Professional/Views/LineChart.cs     Rolling line graph used by the dashboards
   App/Professional/Views/EmulatorMonitorView.cs  Live emulator and wired dashboard (Emulator & wired)
@@ -759,6 +932,7 @@ SourceCode/
   Configuration/ClientConfiguration.cs    The configuration/ directory on the client
   Configuration/DatabaseCredentials.cs    Generated MariaDB passwords and their file format
   Configuration/SettingsBackup.cs         Encrypted export / import of the configuration directory
+  Configuration/InstallerSettings.cs      Default server and key, downloader path (configuration/settings.json)
   Remote/ServerConnection.cs              SSH login, OS check, sudo -> root, RunAsRootAsync
   Remote/SshKeys.cs                       Key generation (encrypted OpenSSH format) and public key parsing
   Remote/BcryptPbkdf.cs                   bcrypt_pbkdf: turns the key password into the encryption key
@@ -772,10 +946,18 @@ SourceCode/
   Remote/WebAccessInstaller.cs            Docker Engine, NGINX on 127.0.0.1:85, Traefik (/opt/traefik), Polaris whitelist, tests
   Remote/OctaneInstaller.cs               yarn install, Octane configuration + gamedata folders, yarn build, serve dist/
   Remote/HardenInstaller.cs               ufw firewall, Polaris ws.whitelist / ws.ip.header, sysctl SYN flood settings
+  Remote/SshLoginInstaller.cs             sshd: password login off (drop-in in sshd_config.d) or on again
   Remote/HotelSite.cs                     The hotel's NGINX site (Octane on /, or AtomCMS with Octane on /client/)
   Remote/AtomCmsInstaller.cs              AtomCMS: .env, composer, migrations and settings, theme build, tests
+  Remote/AssetSync.cs                     Deploy Assets: compare with /var/www/gamedata, upload as a tar stream
+  Remote/UiTextsInstaller.cs              Installs UITexts_<language>.jsonc.example as gamedata/config/UITexts.jsonc
+  Remote/EmulatorAssetsInstaller.cs       Polaris' / the installer's Assets (images, hotel view, badge parts) into gamedata, missing files only
+  Remote/GamedataFiles.cs                 Asset Explorer server side: list, upload (rights), download, rename, delete, locked to gamedata
   Remote/ServerTools.cs                   Restarts, database backup / import, system and emulator updates
   Remote/ServerStatus.cs                  Samples CPU, memory, network, disks, users and the git versions
   Remote/EmulatorMonitor.cs               Emulator threads (CPU per thread, jcmd names) and slow-wired log warnings
+  Terminal/TerminalEmulator.cs            xterm-compatible terminal: escape sequences, colours, screens, scrollback
+  Terminal/TerminalControl.cs             Draws the terminal; keyboard, mouse selection, copy / paste
+  Terminal/TerminalSession.cs             SSH shell (xterm-256color) feeding the terminal
   Remote/RemoteScript.cs                  Runs an install script as root with live output
 ```

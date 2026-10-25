@@ -34,16 +34,25 @@ public sealed class InstallerWindow : Window
     private Button? _dashboardNavigation;
     private Button? _installNavigation;
     private Button? _atomNavigation;
+    private Button? _deployNavigation;
+    private Button? _explorerNavigation;
     private Button? _toolsNavigation;
+    private Button? _settingsNavigation;
     private Button? _aboutNavigation;
+    private readonly SettingsView _settings = new();
     private readonly ServerWizard _wizard;
     private readonly ServerWizard _atomWizard;
+    private readonly ServerWizard _deployWizard;
+    private readonly ServerWizard _explorerWizard;
+    private readonly AssetExplorerView _explorer;
+    // The explorer is shown instead of its login wizard while that is connected.
+    private bool _explorerShown;
     private readonly ServerWizard _toolsWizard;
     private readonly ToolsView _tools;
-    private ServerWizard[] Wizards => [_wizard, _atomWizard, _toolsWizard];
+    private ServerWizard[] Wizards => [_wizard, _atomWizard, _deployWizard, _explorerWizard, _toolsWizard];
     private bool AnyBusy => Wizards.Any(w => w.IsBusy);
     // The wizard on screen; the header and footer show its connection.
-    private ServerWizard Current => _page switch { Page.AtomCms => _atomWizard, Page.Tools or Page.ServerStatus or Page.EmulatorMonitor => _toolsWizard, _ => _wizard };
+    private ServerWizard Current => _page switch { Page.AtomCms => _atomWizard, Page.DeployAssets => _deployWizard, Page.AssetExplorer => _explorerWizard, Page.Tools or Page.ServerStatus or Page.EmulatorMonitor or Page.Terminal => _toolsWizard, _ => _wizard };
 
     public InstallerWindow()
     {
@@ -62,6 +71,16 @@ public sealed class InstallerWindow : Window
         _atomWizard = new ServerWizard([atomStep],
             (_, _, site, _, steps) => FinishedView.BuildAtomCms(site, atomStep.InstallationKey, atomStep.InstallationCompleted, steps),
             "Web installer", keyLogin: true);
+        var syncStep = new AssetSyncStep();
+        var textsStep = new UiTextsStep();
+        var emulatorAssetsStep = new EmulatorAssetsStep();
+        _deployWizard = new ServerWizard([syncStep, textsStep, emulatorAssetsStep],
+            (_, _, site, _, steps) => FinishedView.BuildDeploy(site, [syncStep.Summary, textsStep.Summary, emulatorAssetsStep.Summary], steps),
+            "Assets on the server", keyLogin: true);
+        // Asset Explorer: the wizard only logs in, then the explorer takes the page.
+        _explorerWizard = new ServerWizard([], (_, _, _, _, _) => Text("Opening the explorer ...", 13), "Asset Explorer", keyLogin: true, finishTitle: "Explorer");
+        _explorer = new AssetExplorerView(() => _explorerWizard.Connection, () => _explorerWizard.DisconnectAndResetAsync());
+        _explorerWizard.StateChanged += () => { if (_page == Page.AssetExplorer) ShowAssetExplorer(); };
         // No install steps: the wizard only logs in; the tools above it work while it is connected.
         ToolsView? tools = null;
         _toolsWizard = new ServerWizard([], (_, _, _, _, _) => tools!.Connected, "Use the tools", keyLogin: true, finishTitle: "Connected");
@@ -69,6 +88,7 @@ public sealed class InstallerWindow : Window
         _tools = tools;
         _toolsWizard.StateChanged += _tools.Refresh;
         _tools.MonitorRequested += ShowMonitor;
+        _tools.TerminalRequested += ShowTerminal;
         _tools.BackRequested += ShowTools;
         foreach (ServerWizard wizard in Wizards)
         {
@@ -92,8 +112,6 @@ public sealed class InstallerWindow : Window
         };
         ShowDashboard();
     }
-
-    // ---------------------------------------------------------------- shell
 
     private Control BuildLayout()
     {
@@ -174,10 +192,16 @@ public sealed class InstallerWindow : Window
         nav.Children.Add(SidebarLabel("ADDONS"));
         _atomNavigation = NavButton("AtomCMS", Icons.Puzzle, ShowAtomCms);
         nav.Children.Add(_atomNavigation);
+        _deployNavigation = NavButton("Deploy Assets", Icons.Download, ShowDeployAssets);
+        nav.Children.Add(_deployNavigation);
+        _explorerNavigation = NavButton("Asset Explorer", Icons.FolderSync, () => { _explorerShown = false; ShowAssetExplorer(); });
+        nav.Children.Add(_explorerNavigation);
         nav.Children.Add(SidebarLabel("TOOLS"));
         _toolsNavigation = NavButton("Tools", Icons.Wrench, ShowTools);
         nav.Children.Add(_toolsNavigation);
         nav.Children.Add(SidebarLabel("GENERAL"));
+        _settingsNavigation = NavButton("Settings", Icons.Cog, ShowSettings);
+        nav.Children.Add(_settingsNavigation);
         _aboutNavigation = NavButton("About", Icons.Info, ShowAbout);
         nav.Children.Add(_aboutNavigation);
         Grid.SetRow(nav, 1);
@@ -256,7 +280,7 @@ public sealed class InstallerWindow : Window
         _pageScroll.Offset = default;
     }
 
-    private enum Page { Dashboard, Install, AtomCms, Tools, ServerStatus, EmulatorMonitor, About }
+    private enum Page { Dashboard, Install, AtomCms, DeployAssets, AssetExplorer, Tools, ServerStatus, EmulatorMonitor, Terminal, Settings, About }
     private Page _page;
 
     private void RefreshHeader()
@@ -265,10 +289,16 @@ public sealed class InstallerWindow : Window
         {
             Page.Install => ("Install New Server", "Log in to the Ubuntu / Debian server that will run the hotel."),
             Page.AtomCms => ("AtomCMS", "Addon: AtomCMS as the hotel's website, Octane on /client."),
+            Page.AssetExplorer => ("Asset Explorer", _explorerWizard.Connection is { } explorerConnection
+                ? $"This computer on the left, {explorerConnection.Login.Host}:{GamedataFiles.Root} on the right."
+                : "Addon: manage the files in /var/www/gamedata, with this computer next to it."),
+            Page.DeployAssets => ("Deploy Assets", "Addon: copy the hotel's assets, the client's UI texts and the emulator's images to /var/www/gamedata on the server."),
             Page.Tools => ("Tools", "Restart services, back up and import the database, update, and move your settings."),
             Page.ServerStatus => ("Server status", $"Live figures of {_toolsWizard.Connection?.Login.Host ?? "the server"}, every 2 seconds."),
+            Page.Terminal => ("SSH terminal", $"A shell on {_toolsWizard.Connection?.Login.Host ?? "the server"}, logged in like Tools ({_toolsWizard.Connection?.Login.User ?? "root"})."),
             Page.EmulatorMonitor => ("Emulator & wired", $"The emulator on {_toolsWizard.Connection?.Login.Host ?? "the server"}: CPU per thread, the wired engine and slow wired rooms."),
             Page.About => ("About", "All-in-1 Installer"),
+            Page.Settings => ("Settings", "Default server and SSH key, your own SSH keys, and the All-in-1 downloader."),
             _ => ("Dashboard", "Set up a complete hotel server over SSH.")
         };
 
@@ -292,8 +322,6 @@ public sealed class InstallerWindow : Window
         _status.Text = Current.StatusMessage;
     }
 
-    // ---------------------------------------------------------------- pages
-
     private void ShowDashboard()
     {
         _page = Page.Dashboard;
@@ -305,6 +333,10 @@ public sealed class InstallerWindow : Window
             Text("ADDONS", 11, "Pro.Muted", FontWeight.SemiBold),
             Tile("AtomCMS", "After the installation: AtomCMS (github.com/ObjectRetros/atomcms) as the hotel's website, Octane moves to /client.",
                 Icons.Puzzle, Color.Parse("#E8590C"), ShowAtomCms),
+            Tile("Deploy Assets", "Sync the furniture, clothes, badges and game data of the All-in-1 downloader to /var/www/gamedata (only new and changed files), and the client's UI texts in your language.",
+                Icons.Download, Color.Parse("#8B5CF6"), ShowDeployAssets),
+            Tile("Asset Explorer", "Two panes like Norton Commander: this computer and /var/www/gamedata on the server. Upload, download, rename, delete; uploads get the right owner and rights.",
+                Icons.FolderSync, Color.Parse("#2563EB"), () => { _explorerShown = false; ShowAssetExplorer(); }),
             Text("TOOLS", 11, "Pro.Muted", FontWeight.SemiBold),
             Tile("Tools", "Restart services, database backup and import, system / emulator / Octane updates, encrypted settings backup.",
                 Icons.Wrench, Color.Parse("#0E9F9E"), ShowTools));
@@ -316,6 +348,7 @@ public sealed class InstallerWindow : Window
     {
         _page = Page.Install;
         ActivateNavigation(_installNavigation);
+        _wizard.ApplySettings();
         ShowScrollPage(_wizard.View);
         _wizard.FocusCurrentStep();
         RefreshHeader();
@@ -326,6 +359,7 @@ public sealed class InstallerWindow : Window
     {
         _page = Page.Tools;
         ActivateNavigation(_toolsNavigation);
+        _toolsWizard.ApplySettings();
         ShowScrollPage(_toolsWizard.View, _tools.Workspace, _tools.Settings);
         _toolsWizard.FocusCurrentStep();
         RefreshHeader();
@@ -342,14 +376,72 @@ public sealed class InstallerWindow : Window
         RefreshFooter();
     }
 
+    // The terminal fills the page (no scrolling around it); Back or Tools returns to the tiles.
+    private void ShowTerminal()
+    {
+        _page = Page.Terminal;
+        ActivateNavigation(_toolsNavigation);
+        _content.Children.Clear();
+        _pageHost.Content = _tools.TerminalPage;
+        RefreshHeader();
+        RefreshFooter();
+    }
+
+    // The login wizard until it is connected, then the explorer filling the page (no scrolling around it).
+    private void ShowAssetExplorer()
+    {
+        bool connected = _explorerWizard.Connection is { IsConnected: true } && !_explorerWizard.IsBusy;
+        bool switching = _page != Page.AssetExplorer || connected != _explorerShown;
+        _page = Page.AssetExplorer;
+        ActivateNavigation(_explorerNavigation);
+        if (switching)
+        {
+            _explorerShown = connected;
+            if (connected)
+            {
+                _content.Children.Clear();
+                _pageHost.Content = _explorer;
+            }
+            else
+            {
+                _explorerWizard.ApplySettings();
+                ShowScrollPage(_explorerWizard.View);
+                _explorerWizard.FocusCurrentStep();
+            }
+        }
+        RefreshHeader();
+        RefreshFooter();
+    }
+
+    private void ShowDeployAssets()
+    {
+        _page = Page.DeployAssets;
+        ActivateNavigation(_deployNavigation);
+        _deployWizard.ApplySettings();
+        ShowScrollPage(_deployWizard.View);
+        _deployWizard.FocusCurrentStep();
+        RefreshHeader();
+        RefreshFooter();
+    }
+
     private void ShowAtomCms()
     {
         _page = Page.AtomCms;
         ActivateNavigation(_atomNavigation);
+        _atomWizard.ApplySettings();
         ShowScrollPage(_atomWizard.View);
         _atomWizard.FocusCurrentStep();
         RefreshHeader();
         RefreshFooter();
+    }
+
+    private void ShowSettings()
+    {
+        _page = Page.Settings;
+        ActivateNavigation(_settingsNavigation);
+        _settings.Refresh();
+        ShowScrollPage(_settings.View);
+        RefreshHeader();
     }
 
     private void ShowAbout()

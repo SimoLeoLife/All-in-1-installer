@@ -31,27 +31,27 @@ public static class EmulatorInstaller
     public const string Account = "emulator";
     public const string AccountHome = "/var/lib/emulator";
 
-    /// <summary>"Adoptium GPG Key (DEB/RPM Signing Key)", used for Temurin where the distribution has no OpenJDK 25.</summary>
+    /// <summary>Adoptium's signing key, used for Temurin where the distribution has no OpenJDK 25.</summary>
     public const string AdoptiumKeyFingerprint = "3B04D753C9050D9A5D343F39843C48A565F8F04B";
 
-    // Distribution OpenJDK or Temurin.
+    // The distribution's OpenJDK 25, or Temurin 25.
     public const string FindJava = "ls -d /usr/lib/jvm/java-25-openjdk-* /usr/lib/jvm/temurin-25-jdk-* 2>/dev/null | head -1";
 
-    // Falls back to the process when there is no systemd.
+    // Without systemd, look for the process instead.
     private const string RunningCheck =
         "if [ -d /run/systemd/system ]; then systemctl is-active --quiet emulator; else pgrep -u emulator -f 'jar-with-dependencies' >/dev/null; fi";
 
-    // Shell functions emulator_running, stop_emulator, start_emulator and wait_loaded; expects $d and $log to be set.
+    // Shell helpers that control the emulator. The calling script must set $d and $log.
     public const string ControlFunctions = $$"""
         emulator_running() { {{RunningCheck}}; }
         stop_emulator() {
-          # || true: pkill fails when nothing runs, which would end the script (set -e).
+          # pkill fails when nothing runs, which would end the script under set -e.
           if [ -d /run/systemd/system ]; then systemctl stop emulator; else pkill -u {{Account}} -f 'jar-with-dependencies' || true; fi
           for i in $(seq 1 30); do emulator_running || return 0; sleep 1; done
           fail "The emulator did not stop within 30 seconds."
         }
         start_emulator() {
-          # Start with an empty log, so only this start counts.
+          # Start with an empty log so only this start counts.
           [ -f "$log" ] && mv "$log" "$log.$(date +%H%M%S_%d-%m-%Y)"
           if [ -d /run/systemd/system ]; then
             systemctl restart emulator
@@ -103,8 +103,8 @@ public static class EmulatorInstaller
     }
 
     /// <summary>
-    /// Installs JDK 25 (the build needs 25 or 26), from Adoptium's Temurin where the distribution has none
-    /// (Debian 11/12). Returns JAVA_HOME.
+    /// Installs JDK 25, since the build needs 25 or 26. Uses Adoptium's Temurin where the distribution has none,
+    /// as on Debian 11 and 12. Returns JAVA_HOME.
     /// </summary>
     public static async Task<string> InstallJavaAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
@@ -138,7 +138,7 @@ public static class EmulatorInstaller
         return result["JAVA_HOME"] ?? "";
     }
 
-    /// <summary>System account without a login shell; its home holds Maven's cache.</summary>
+    /// <summary>Creates a system account without a login shell. Its home holds Maven's cache.</summary>
     public static Task CreateAccountAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
@@ -151,7 +151,7 @@ public static class EmulatorInstaller
             echo "  $(id {{Account}})"
             chown -R {{Account}}:www-data {{Repository}}
             echo "  {{Repository}} belongs to {{Account}}:www-data"
-            # setgid: log files created here belong to group www-data, so the website can read them.
+            # setgid so log files created here belong to group www-data and the website can read them.
             install -d -m 2750 -o {{Account}} -g www-data {{LogDirectory}}
             chmod 2750 {{LogDirectory}}
             chown {{Account}}:www-data {{LogDirectory}}/emulator.log* 2>/dev/null || true
@@ -165,8 +165,8 @@ public static class EmulatorInstaller
     {
         string script = RemoteScript.Prelude + $$"""
             d={{Directory}}
-            # Maven itself: mvnw downloads it silently and without a timeout, which can hang for good (e.g. on a
-            # server with broken IPv6). Download the version mvnw asks for here instead, visibly, with timeouts.
+            # mvnw downloads Maven silently and without a timeout, which can hang forever on a server with broken IPv6.
+            # Download the version it asks for here instead, with visible output and timeouts.
             props="$d/.mvn/wrapper/maven-wrapper.properties"
             url=$(sed -n 's/^distributionUrl=//p' "$props" 2>/dev/null | tr -d '\r')
             sum=$(sed -n 's/^distributionSha256Sum=//p' "$props" 2>/dev/null | tr -d '\r')
@@ -178,7 +178,7 @@ public static class EmulatorInstaller
                 echo "> Downloading $name (only the first build)"
                 echo "  $url"
                 tmp=$(mktemp -d)
-                # New Maven releases can reach the Apache download servers before Maven Central: try those too.
+                # New Maven releases can reach the Apache download servers before Maven Central, so try those too.
                 version=${name#apache-maven-}
                 apache="maven/maven-${version%%.*}/$version/binaries/$name-bin.zip"
                 got=
@@ -221,7 +221,7 @@ public static class EmulatorInstaller
             echo "> $d/build.sh (as {{Account}})"
             [ -d {{AccountHome}}/.m2/repository ] || echo "  The first build downloads the libraries (about 150 MB): this takes a few minutes."
             cd "$d"
-            # Maven prints little while it downloads: report progress every 30 s, and stop after 30 minutes.
+            # Maven prints little while it downloads, so report progress every 30 s and give up after 30 minutes.
             start=$(date +%s)
             timeout 1800 runuser -u {{Account}} -- env HOME={{AccountHome}} "$d/build.sh" &
             build=$!
@@ -260,7 +260,7 @@ public static class EmulatorInstaller
             GRANT ALL PRIVILEGES ON `{credentials.Database.Replace("`", "``")}`.* TO {user}@'localhost';
             FLUSH PRIVILEGES;
             """;
-        // "key=value" replaces the line in config.ini; "?key=value" only replaces an empty or change-me value.
+        // "key=value" replaces the line in config.ini. "?key=value" only replaces an empty or change-me value.
         string overrides = string.Join('\n',
             "db.hostname=127.0.0.1",
             $"db.port={credentials.Port}",
@@ -392,8 +392,8 @@ public static class EmulatorInstaller
     }
 
     /// <summary>
-    /// Stops a running emulator while writing so it cannot write its own values back. No-op when the values are
-    /// already set; returns false when the emulator is not set up yet.
+    /// Stops a running emulator while writing so it cannot write its own values back. Does nothing when the values
+    /// are already set, and returns false when the emulator is not set up yet.
     /// </summary>
     public static async Task<bool> SetSettingsAsync(ServerConnection connection, IReadOnlyList<(string Key, string Value)> settings,
         string what, Action<string> log, string setup = "", CancellationToken token = default)
@@ -449,7 +449,7 @@ public static class EmulatorInstaller
         return result.Yes("SETTINGS");
     }
 
-    /// <summary>Null when unset or when the emulator is not set up.</summary>
+    /// <summary>Returns null when the key is unset or the emulator is not set up.</summary>
     public static async Task<string?> ReadSettingAsync(ServerConnection connection, string key, CancellationToken token = default)
     {
         string script = $$"""
@@ -461,7 +461,7 @@ public static class EmulatorInstaller
     }
 
     /// <summary>
-    /// Restarts the emulator and waits until it has loaded; the first start creates the database. Then sets
+    /// Restarts the emulator and waits until it has loaded. The first start creates the database. Then sets
     /// console.mode and the websocket whitelist, restarting again if they changed.
     /// </summary>
     public static async Task<EmulatorStartResult> StartAsync(ServerConnection connection, string whitelist, Action<string> log,

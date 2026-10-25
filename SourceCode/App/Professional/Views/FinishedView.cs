@@ -15,7 +15,6 @@ public enum StepSummary { Done, AlreadyInstalled, Skipped, Failed, NotRun }
 /// <summary>Last wizard page: what every step did and where the game assets go.</summary>
 public static class FinishedView
 {
-    private static readonly FontFamily Mono = new("Cascadia Mono, Consolas, DejaVu Sans Mono, monospace");
 
     /// <summary>Every folder of /var/www/gamedata and what goes in it (the layout the Octane step configures).</summary>
     public static readonly (string Folder, string Contents)[] Assets =
@@ -117,6 +116,28 @@ public static class FinishedView
         later.Children.Add(Text("Updating AtomCMS (git pull, composer install, migrations, theme) and Octane: run this addon again.", 13));
         later.Children.Add(Text($"Rebuilding only Octane (for /client): {OctaneInstaller.Octane}/build.sh.", 12, "Pro.Subtle"));
         page.Children.Add(Section("3. Later", later));
+        return page;
+    }
+
+    /// <summary>Last page of Deploy Assets: what was sent and what to do next.</summary>
+    public static Control BuildDeploy(WebAccessSettings? site, IEnumerable<string?> summaries, IReadOnlyList<(string Title, StepSummary Result)> steps)
+    {
+        var page = new StackPanel { Spacing = 18 };
+        bool failed = steps.Any(s => s.Result is StepSummary.Failed or StepSummary.NotRun);
+        string done = string.Join(" ", summaries.Where(s => !string.IsNullOrEmpty(s)));
+        var banner = new ResultBanner();
+        banner.Show(failed ? ResultKind.Warning : ResultKind.Success,
+            failed ? "Not everything finished" : "The server has the assets",
+            failed ? "Run the step again (see the step for the reason)." + (done.Length > 0 ? " Done: " + done : "")
+                : done.Length > 0 ? done : "Nothing needed to change.");
+        page.Children.Add(banner);
+        page.Children.Add(StepList(steps));
+        var next = new StackPanel { Spacing = 6 };
+        next.Children.Add(Text($"Players get the new files when they reload {site?.ClientUrl ?? "the hotel"}.", 13));
+        next.Children.Add(Text("New furniture also needs its rows in items_base and catalog_items: make the SQL with the All-in-1 converter " +
+                               "(Hotel Tools → Generate SQL) and run it on the database (HeidiSQL over the SSH tunnel), then :update_items in the hotel or restart the emulator.", 13));
+        next.Children.Add(Text("Download more with the All-in-1 downloader and sync again: only the new files are sent.", 12, "Pro.Subtle"));
+        page.Children.Add(Section("Next", next));
         return page;
     }
 

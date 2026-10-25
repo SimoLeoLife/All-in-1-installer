@@ -11,13 +11,12 @@ using static AllInOneInstaller.App.Professional.Views.ServerStatusView;
 namespace AllInOneInstaller.App.Professional.Views;
 
 /// <summary>
-/// Live view of the emulator: process CPU and memory, the CPU of every wired thread, where the emulator's CPU
-/// goes per thread group, and the rooms in the log's slow-wired warnings. Samples while it is on screen.
+/// Live view of the emulator's CPU, memory and wired threads, plus the rooms from the log's slow-wired warnings.
+/// Samples only while it is on screen.
 /// </summary>
 public sealed class EmulatorMonitorView : StackPanel
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(2);
-    // The log is read every fifth sample.
     private const int LogEvery = 5;
     private static readonly Color EmuColor = Brand;
     private static readonly Color WiredColor = Color.Parse("#E8590C");
@@ -25,7 +24,7 @@ public sealed class EmulatorMonitorView : StackPanel
     private readonly Func<ServerConnection?> _connection;
     private readonly DispatcherTimer _timer = new() { Interval = Interval };
     private EmulatorSample? _previous;
-    // Full thread names from the JVM, re-read when threads appear that it has no name for.
+    // Full thread names from a JVM thread dump, re-read when unknown threads appear.
     private Dictionary<int, string> _names = [];
     private int _namesPid;
     private bool _sampling;
@@ -108,14 +107,14 @@ public sealed class EmulatorMonitorView : StackPanel
             {
                 _names = await Task.Run(() => EmulatorMonitor.ThreadNamesAsync(connection, sample.Pid));
                 _namesPid = sample.Pid;
-                // A thread dump briefly pauses the JVM: threads it does not list keep their /proc name, so they
-                // do not cause another one.
+                // A thread dump briefly pauses the JVM. Threads it did not list keep their /proc name so they
+                // don't trigger another dump.
                 foreach (JvmThread thread in sample.Threads) _names.TryAdd(thread.Id, thread.Name);
             }
             Show(sample with { Threads = sample.Threads.Select(t => _names.TryGetValue(t.Id, out string? name) ? t with { Name = name } : t).ToList() });
             if (_ticks++ % LogEvery == 0)
             {
-                // The log is extra: a problem there never stops the live figures.
+                // A log problem must not stop the live figures.
                 try { await ReadLogAsync(connection); }
                 catch (Exception ex) { _logSummary.Text = $"Could not read the log: {ex.Message}"; }
             }
@@ -150,7 +149,7 @@ public sealed class EmulatorMonitorView : StackPanel
         _threads.Text = s.Threads.Count.ToString();
         _threadsDetail.Text = $"running {s.Threads.Count(t => t.State == 'R')} · up {Uptime(s.StartedSecondsAgo)}";
 
-        // A restart gives a new pid: start the rates again.
+        // A restart gives a new pid, so the rates start over.
         if (_previous is not { } previous || previous.Pid != s.Pid)
         {
             _previous = s;
@@ -178,7 +177,6 @@ public sealed class EmulatorMonitorView : StackPanel
 
         _wiredThreads.Children.Clear();
         _wiredThreads.RowDefinitions.Clear();
-        int row = 0;
         // The log numbers the heavy workers after the shards ("Slow wired task: shard=6" with 6 shards).
         int shardCount = wired.Count(t => t.Name.StartsWith("WiredTickShard-", StringComparison.Ordinal));
         string Label(JvmThread t) =>
@@ -186,20 +184,19 @@ public sealed class EmulatorMonitorView : StackPanel
                 ? $"Heavy rooms (shard {shardCount + heavy})"
                 : EmulatorMonitor.WiredName(t.Name);
         foreach (JvmThread thread in wired)
-            AddRow(_wiredThreads, row++, Text(Label(thread), 12.5, weight: FontWeight.SemiBold), Bar(Math.Min(100, Cpu(thread))),
+            AddGridRow(_wiredThreads, Text(Label(thread), 12.5, weight: FontWeight.SemiBold), Bar(Math.Min(100, Cpu(thread))),
                 Text($"{Cpu(thread):0.0}%", 12.5), Text(thread.State == 'R' ? "running" : "waiting", 12, "Pro.Muted"));
         if (wired.Count == 0)
-            AddRow(_wiredThreads, 0, Text("No wired threads: this emulator version has no WiredTickService.", 12.5, "Pro.Muted"));
+            AddGridRow(_wiredThreads, Text("No wired threads: this emulator version has no WiredTickService.", 12.5, "Pro.Muted"));
 
         _groups.Children.Clear();
         _groups.RowDefinitions.Clear();
-        row = 0;
         foreach (var group in s.Threads.GroupBy(t => EmulatorMonitor.Group(t.Name)).Select(g => (Name: g.Key, Count: g.Count(), Cpu: g.Sum(Cpu)))
                      .OrderByDescending(g => g.Cpu).ThenBy(g => g.Name))
         {
             double share = core > 0 ? group.Cpu * 100 / core : 0;
-            // The share of the emulator's CPU, not a warning level: one colour.
-            AddRow(_groups, row++, Text(group.Name, 12.5, weight: FontWeight.SemiBold), Bar(Math.Min(100, share), EmuColor),
+            // A share of the emulator's CPU rather than a warning level, so a single colour.
+            AddGridRow(_groups, Text(group.Name, 12.5, weight: FontWeight.SemiBold), Bar(Math.Min(100, share), EmuColor),
                 Text($"{group.Cpu:0.0}%", 12.5), Text($"{group.Count} threads", 12, "Pro.Muted"));
         }
         _previous = s;
@@ -229,10 +226,9 @@ public sealed class EmulatorMonitorView : StackPanel
         if (summary.Rooms.Count > 0)
         {
             string[] headings = ["Room", "Name", "Slow tasks", "Slowest", "Total", "Shard / last seen"];
-            AddRow(_rooms, 0, headings.Select(h => (Control)Text(h, 11.5, "Pro.Muted", FontWeight.SemiBold)).ToArray());
-            int row = 1;
+            AddGridRow(_rooms, headings.Select(h => (Control)Text(h, 11.5, "Pro.Muted", FontWeight.SemiBold)).ToArray());
             foreach (SlowWiredRoom room in summary.Rooms.Take(15))
-                AddRow(_rooms, row++, Mono(room.RoomId.ToString()), Text(room.Name ?? "?", 12.5),
+                AddGridRow(_rooms, Mono(room.RoomId.ToString()), Text(room.Name ?? "?", 12.5),
                     Text(room.Count.ToString(), 12.5), Text($"{room.SlowestMs} ms", 12.5, room.SlowestMs >= 500 ? "Pro.ErrorText" : "Pro.Text"),
                     Text($"{room.TotalMs} ms", 12.5), Text($"{room.Shards} · {room.LastSeen}", 12, "Pro.Muted"));
         }
@@ -246,18 +242,6 @@ public sealed class EmulatorMonitorView : StackPanel
                 text.TextWrapping = TextWrapping.Wrap;
                 _recent.Children.Add(text);
             }
-        }
-    }
-
-    private static void AddRow(Grid grid, int row, params Control[] cells)
-    {
-        grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-        for (int i = 0; i < cells.Length; i++)
-        {
-            cells[i].VerticalAlignment = VerticalAlignment.Center;
-            Grid.SetRow(cells[i], row);
-            Grid.SetColumn(cells[i], i);
-            grid.Children.Add(cells[i]);
         }
     }
 }

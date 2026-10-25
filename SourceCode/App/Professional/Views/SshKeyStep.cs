@@ -20,7 +20,6 @@ public enum KeyStepOutcome { Installed, Failed, Aborted }
 /// </summary>
 public sealed class SshKeyStep
 {
-    private static readonly FontFamily Mono = new("Cascadia Mono, Consolas, DejaVu Sans Mono, monospace");
 
     private readonly RadioButton _generate = new() { GroupName = "keysource", IsChecked = true };
     private readonly RadioButton _provide = new() { GroupName = "keysource" };
@@ -98,8 +97,6 @@ public sealed class SshKeyStep
         _host.Content = _options;
         RefreshOptions();
     }
-
-    // ---------------------------------------------------------------- layout
 
     private static Control OptionLabel(string title, string caption)
     {
@@ -231,8 +228,6 @@ public sealed class SshKeyStep
         return SshKeys.TryParsePublicKey(_publicKey.Text ?? "", out _, out string error) ? null : error;
     }
 
-    // ---------------------------------------------------------------- run
-
     public async Task<KeyStepOutcome> RunAsync(ServerConnection connection, Window owner)
     {
         _host.Content = _run;
@@ -326,7 +321,7 @@ public sealed class SshKeyStep
             Log($"  Done. {now.Count} key(s) installed now.");
             Done(mode == AuthorizedKeysMode.Replace ? "replaced all keys" : $"{now.Count} key(s) installed");
 
-            // Prove the key works when we hold the private key.
+            // Key login can only be tested when the private key was generated here.
             if (pair is null)
             {
                 Log("> Key login test skipped: the private key stays on your computer.");
@@ -380,8 +375,6 @@ public sealed class SshKeyStep
             Status?.Invoke(heading + ".");
         }
     }
-
-    // ---------------------------------------------------------------- helpers
 
     private async Task BrowseAsync()
     {

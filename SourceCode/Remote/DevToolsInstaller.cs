@@ -25,7 +25,7 @@ public static class DevToolsInstaller
     // "NSolid <nsolid-gpg@nodesource.com>", which signs deb.nodesource.com.
     public const string NodeSourceKeyFingerprint = "6F71F525282841EEDAF851B42F59B5F99B1BE0B4";
 
-    // Pins PATH to the /usr/bin tools this step installs; shadowing() lists older copies earlier in root's PATH.
+    // Pins PATH to the /usr/bin tools this step installs. shadowing() lists older copies earlier in root's PATH.
     private const string ToolEnvironment = """
         login_path="$PATH"
         export PATH=/usr/sbin:/usr/bin:/sbin:/bin
@@ -36,9 +36,9 @@ public static class DevToolsInstaller
           done
           return 0
         }
-        # Composer refuses to run as root without this; the installer is root on purpose.
+        # Composer refuses to run as root without this, and the installer runs as root on purpose.
         export COMPOSER_ALLOW_SUPERUSER=1
-        # No "new npm version available" notices in the log.
+        # Keep npm's update notices out of the log.
         export npm_config_update_notifier=false
         # Corepack would otherwise ask before downloading Yarn.
         export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -81,14 +81,14 @@ public static class DevToolsInstaller
 
             echo "> Adding https://deb.nodesource.com/node_{{NodeMajor}}.x"
             echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_{{NodeMajor}}.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
-            # Node.js always from NodeSource, also where the distribution has its own nodejs package.
+            # Always take Node.js from NodeSource, even where the distribution ships its own nodejs package.
             printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 900\n' > /etc/apt/preferences.d/99nodesource
             apt_update
             """;
         return RemoteScript.RunAsync(connection, script, log, "Adding the NodeSource repository failed", token);
     }
 
-    /// <summary>Returns the installed version, e.g. "v26.12.1". npm comes with the nodejs package.</summary>
+    /// <summary>Returns the installed version, such as "v26.12.1". npm comes with the nodejs package.</summary>
     public static async Task<string> InstallNodeAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + ToolEnvironment + $$"""
@@ -103,8 +103,8 @@ public static class DevToolsInstaller
         return result["VERSION"] ?? "";
     }
 
-    // The latest stable composer.phar, checked against its published SHA-256 (getcomposer.org/download).
-    // Not composer-setup.php: it downloads the phar itself, without a timeout.
+    // Installs the latest stable composer.phar after checking its published SHA-256.
+    // composer-setup.php is avoided because it downloads the phar without a timeout.
     public static Task InstallComposerAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + ToolEnvironment + """
@@ -133,7 +133,7 @@ public static class DevToolsInstaller
             npm install -g --no-fund --no-audit corepack
             echo "> corepack enable"
             corepack enable
-            # Projects use the Yarn in their package.json ("packageManager"); this is the default elsewhere.
+            # Projects pin Yarn with packageManager in package.json. This sets the default everywhere else.
             echo "> corepack install --global yarn@stable"
             corepack install --global yarn@stable
             """;

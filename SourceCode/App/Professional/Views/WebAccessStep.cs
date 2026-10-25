@@ -71,7 +71,7 @@ public sealed partial class WebAccessStep : InstallStep
         return panel;
     }
 
-    /// <summary>"https://example.com/" typed in the address box: take the scheme from it and keep the host.</summary>
+    // A full URL typed in the address box sets http or https, and only its host is kept.
     private WebAccessSettings Settings()
     {
         string text = (_address.Text ?? "").Trim();

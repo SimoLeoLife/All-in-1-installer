@@ -4,7 +4,7 @@ using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 
 namespace AllInOneInstaller.App.Professional.Views;
 
-/// <summary>What an install step shows while it runs: progress bar, check list, result box and the live log.</summary>
+/// <summary>Progress, check list, result and live log shown while an install step runs.</summary>
 public sealed class RunPanel : StackPanel
 {
     private readonly ProgressBar _progress = new() { IsIndeterminate = true, Height = 3, MinHeight = 3, Foreground = Solid(Brand) };
@@ -14,7 +14,7 @@ public sealed class RunPanel : StackPanel
 
     public CheckList Checks { get; }
     public ResultBanner Result { get; } = new();
-    /// <summary>Under the result box, e.g. a value to copy; emptied when the step runs again.</summary>
+    /// <summary>Extra content under the result box, cleared when the step runs again.</summary>
     public ContentControl Extra { get; } = new();
 
     public RunPanel(double logHeight, params string[] checks)

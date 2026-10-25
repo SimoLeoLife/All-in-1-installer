@@ -16,7 +16,7 @@ public sealed record MariaDbState(
     // Without the "1:" epoch.
     public string? DisplayVersion => InstalledVersion?.Split(':').Last();
 
-    // mariadb.org packages carry "+maria~" in their version; distribution packages do not.
+    // mariadb.org packages carry "+maria~" in their version, distribution packages do not.
     public bool FromMariaDbOrg => InstalledVersion?.Contains("+maria", StringComparison.Ordinal) == true;
 
     public bool IsTargetBranch => FromMariaDbOrg && InstalledVersion!.Split(':').Last().StartsWith(MariaDbInstaller.Branch + ".", StringComparison.Ordinal);
@@ -78,7 +78,7 @@ public static class MariaDbInstaller
             values["database"] == "1", values["rootremote"] == "1", values["cms"] == "1");
     }
 
-    // The signing key is checked against KeyFingerprint; the repository is pinned above the distribution.
+    // Checks the signing key against KeyFingerprint and pins the repository above the distribution's packages.
     public static Task AddRepositoryAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
@@ -133,8 +133,8 @@ public static class MariaDbInstaller
             version=$(dpkg-query -W -f='${Version}' mariadb-server)
             case "$version" in *:{{Branch}}.*+maria*) ;; *) fail "Installed mariadb-server $version is not MariaDB {{Branch}} from mariadb.org." ;; esac
 
-            # A server still running the replaced (old) binary, e.g. when package scripts may not restart
-            # services: shut it down cleanly, or the old server keeps running and the new client cannot talk to it.
+            # When package scripts may not restart services, the old server keeps running the replaced binary.
+            # Shut it down cleanly, otherwise the new client cannot talk to it.
             for pid in $(pgrep -x mariadbd; pgrep -x mysqld); do
               if readlink "/proc/$pid/exe" | grep -q '(deleted)'; then
                 echo "  Stopping the old MariaDB server (pid $pid) that still runs the replaced program"
@@ -165,7 +165,7 @@ public static class MariaDbInstaller
     }
 
     /// <summary>
-    /// mariadb-secure-installation with the hotel's answers (n, n, Y, n, Y, Y), then bind-address = 0.0.0.0.
+    /// Applies mariadb-secure-installation with the hotel's answers (n, n, Y, n, Y, Y), then sets bind-address = 0.0.0.0.
     /// The firewall keeps 3306 closed.
     /// </summary>
     public static Task SecureAndListenAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
@@ -197,13 +197,13 @@ public static class MariaDbInstaller
             bind=$(mariadb -N -e 'SELECT @@bind_address')
             echo "  listening on $bind:$(mariadb -N -e 'SELECT @@port')"
             [ "$bind" = "0.0.0.0" ] || fail "MariaDB listens on '$bind' instead of 0.0.0.0 (another config file may set bind-address)."
-            # Port 3306 is never opened in the firewall: tools like HeidiSQL connect through an SSH tunnel (with a key).
+            # Port 3306 is never opened in the firewall. Tools like HeidiSQL connect through an SSH tunnel with a key.
             """;
         return RemoteScript.RunAsync(connection, script, log, "Securing MariaDB failed", token);
     }
 
-    // root@localhost keeps its socket login and also accepts the password: an SSH tunnel arrives from 127.0.0.1,
-    // which MariaDB treats as localhost, not root@'%'.
+    // root@localhost keeps its socket login and also accepts the password. An SSH tunnel arrives from 127.0.0.1,
+    // which MariaDB matches to localhost rather than root@'%'.
     public static string LocalRootPasswordSql(DatabaseCredentials credentials) =>
         $"ALTER USER {Sql.Literal(credentials.RootUser)}@'localhost' IDENTIFIED VIA unix_socket OR mysql_native_password USING PASSWORD({Sql.Literal(credentials.RootPassword)});";
 
@@ -251,7 +251,7 @@ public static class MariaDbInstaller
 
     /// <summary>
     /// Returns null if <paramref name="user"/> can log in and use the database, else the reason. Connects to the
-    /// server's own network address so user@'%' is tested; <paramref name="local"/> adds 127.0.0.1 and the socket.
+    /// server's own network address so user@'%' is tested. <paramref name="local"/> also tests 127.0.0.1 and the socket.
     /// </summary>
     public static async Task<string?> TestLoginAsync(ServerConnection connection, string user, string password, string? database,
         bool local, Action<string> log, CancellationToken token = default)
@@ -267,7 +267,7 @@ public static class MariaDbInstaller
             {{(local ? "set -- \"$@\" \"--protocol=tcp --host=127.0.0.1\" \"--protocol=socket\"" : "")}}
             [ $# -gt 0 ] || { echo "  no network address to test a remote login from"; exit 0; }
             for how in "$@"; do
-              # Single quotes: the SQL has backticks, which bash would run inside double quotes.
+              # Single quotes because the SQL has backticks, which bash would run inside double quotes.
               out=$(mariadb --defaults-extra-file="$secret" $how -N -e '{{check}}' 2>&1) || fail "Login as {{user}} ($how) failed: $out"
               echo "  {{user}} ($how): logged in as $(echo "$out" | head -1)"
             done

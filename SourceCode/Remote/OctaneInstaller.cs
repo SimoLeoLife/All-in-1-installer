@@ -20,7 +20,7 @@ public sealed record OctaneState(
     public bool CameraConfigured => Site is not null && UiCameraUrl == $"{Site.Url}/gamedata/camera" &&
                                     EmulatorImager == EmulatorInstaller.ImagerSettingsLine(Site.Url);
 
-    /// <summary>client-mode.json follows the site layout: /configuration/, or /client/configuration/ with AtomCMS.</summary>
+    /// <summary>client-mode.json uses /configuration/, or /client/configuration/ with AtomCMS.</summary>
     public bool LayoutConfigured => Site is not null && ConfigBaseUrl == $"{Site.ClientUrl}configuration/";
 
     public bool IsComplete => Site is not null && Built && SiteServesOctane && GamedataPresent && ConfiguredSocketUrl == ExpectedSocketUrl &&
@@ -45,8 +45,8 @@ public static class OctaneInstaller
         "export PATH=/usr/sbin:/usr/bin:/sbin:/bin COREPACK_ENABLE_DOWNLOAD_PROMPT=0 CI=1 NO_COLOR=1 FORCE_COLOR=0 HOME=/root";
 
     /// <summary>
-    /// Sets or removes vite's --base in the start and build scripts of package.json (the AtomCMS guide's change),
-    /// e.g. "vite build" becomes "vite --base=/client/ build". The Octane clone step undoes it before a git pull.
+    /// Sets or removes vite's --base in the start and build scripts of package.json, as the AtomCMS guide does.
+    /// The Octane clone step undoes it before a git pull.
     /// </summary>
     public static string PackageBaseCommand(WebAccessSettings site) =>
         "sed -i -E -e 's#(\"(start|build)\": \"vite) --base=[^ \"]+#\\1#'" +
@@ -81,8 +81,8 @@ public static class OctaneInstaller
     }
 
     /// <summary>
-    /// Uses Yarn 4 through Corepack, as package.json pins. <paramref name="fresh"/> removes node_modules and
-    /// yarn.lock first, so every package is resolved again (the update tool).
+    /// Uses Yarn 4 through Corepack, as package.json pins it. The update tool passes <paramref name="fresh"/> to remove
+    /// node_modules and yarn.lock first so every package is resolved again.
     /// </summary>
     public static Task YarnInstallAsync(ServerConnection connection, string directory, Action<string> log, CancellationToken token = default,
         bool fresh = false)
@@ -95,7 +95,7 @@ public static class OctaneInstaller
             {{(fresh ? """
             echo "> rm -rf node_modules yarn.lock"
             rm -rf node_modules yarn.lock
-            # CI mode makes Yarn refuse to write a lockfile; here a new one is the point.
+            # CI mode makes Yarn refuse to write a lockfile, but here a new one is the point.
             export YARN_ENABLE_IMMUTABLE_INSTALLS=false
             """ : "")}}
             echo "> cd {{directory}} && yarn install   (node $(node -v), yarn $(yarn --version))"
@@ -127,8 +127,8 @@ public static class OctaneInstaller
             cd {{Octane}}
             {{PackageBaseCommand(site)}}
             grep -E '"(start|build)": ' package.json | sed 's/^ */  /'
-            # The emulator (group www-data) writes into gamedata: custom badges (c_images/album1584) and edits of
-            # config/*.json. Default ACLs keep files copied in later (download tool, WinSCP) writable for it too.
+            # The emulator, in group www-data, writes custom badges to c_images/album1584 and edits config/*.json.
+            # Default ACLs keep files copied in later, by the download tool or WinSCP, writable for it too.
             command -v setfacl >/dev/null 2>&1 || { echo "> Installing acl (setfacl)"; apt_update >/dev/null; apt-get install -y acl >/dev/null; }
             cat > {{PermissionsScript}} <<'PERMS'
             {{PermissionsScriptContent}}
@@ -137,7 +137,7 @@ public static class OctaneInstaller
             echo "> {{PermissionsScript}}"
             {{PermissionsScript}}
 
-            # The login screen's news (login.news.url): a welcome message, never over the hotel's own news.
+            # A welcome message for the login screen news (login.news.url). Existing news is never overwritten.
             install -d -m 2775 -o www-data -g www-data {{Gamedata}}/news
             if [ -f {{Gamedata}}/news/news.json ]; then
               echo "> {{Gamedata}}/news/news.json: already there, kept"
@@ -153,7 +153,7 @@ public static class OctaneInstaller
         return RemoteScript.RunAsync(connection, script, log, "Writing the Octane configuration failed", token);
     }
 
-    /// <summary>Restores www-data read/write access to gamedata; rerun after copying assets in.</summary>
+    /// <summary>Restores www-data read/write access to gamedata. Run it again after copying assets in.</summary>
     public const string PermissionsScript = "/usr/local/sbin/gamedata-permissions";
 
     private const string PermissionsScriptContent = $$"""
@@ -190,7 +190,7 @@ public static class OctaneInstaller
         }
         """;
 
-    // Plain string, not $$: the JavaScript is full of braces.
+    // Plain string, not $$, because the JavaScript is full of braces.
     private const string ConfigureScript = """
         const fs = require('fs');
         const path = require('path');
@@ -335,7 +335,7 @@ public static class OctaneInstaller
             c() { curl -s --noproxy '*' -k --max-time 10 --resolve "{{name}}:{{port}}:127.0.0.1" "$@"; }
             client="$url{{site.ClientPath}}"
             echo "> $client (Octane)"
-            # The NGINX reload above finishes in the background: give the new workers a moment.
+            # The NGINX reload above finishes in the background, so give the new workers a moment.
             for i in 1 2 3 4 5 6 7 8 9 10; do
               page=$(c "$client" || true)
               echo "$page" | grep -q 'configuration/bootstrap.js' && break

@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using AllInOneInstaller.Configuration;
 using AllInOneInstaller.Remote;
@@ -22,7 +23,17 @@ public delegate Control FinishPage(string host, int sshPort, WebAccessSettings? 
 /// </summary>
 public sealed class ServerWizard : IAsyncDisposable
 {
-    private sealed record Step(string Title, string Caption, string Icon, string Heading, string Help, TextBox? Input);
+    private sealed record Step(string Title, string Caption, string Icon, string Heading, string Help, TextBox? Input, Control? Extra = null);
+
+    // ToString is what the key list shows.
+    private sealed record KeyChoice(string Path)
+    {
+        public override string ToString()
+        {
+            string folder = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(Path)) ?? "";
+            return Path.StartsWith(ClientConfiguration.Directory, StringComparison.Ordinal) ? $"{System.IO.Path.GetFileName(Path)}   (keys/{folder})" : Path;
+        }
+    }
 
     private readonly TextBox _host = new() { PlaceholderText = "192.168.1.10 or hotel.example.com (add :2222 for another SSH port)" };
     private readonly TextBox _user = new() { PlaceholderText = "root or a user with sudo rights" };
@@ -30,6 +41,20 @@ public sealed class ServerWizard : IAsyncDisposable
     private readonly TextBox _keyPassword = new() { PlaceholderText = "Leave empty when the key has no password", PasswordChar = '•', RevealPassword = false };
     // Log in as root with the key the SSH key step saved, instead of account + password + SSH key step.
     private readonly bool _keyLogin;
+    // Install New Server: log in with a password, or with your own SSH key (servers deployed with a key).
+    private readonly RadioButton _usePassword = new() { GroupName = "loginmethod", Content = "Password", IsChecked = true };
+    private readonly RadioButton _useKey = new() { GroupName = "loginmethod", Content = "My own SSH key (the server was set up with a key)" };
+    private readonly ComboBox _keyChoice = new() { MinWidth = 520 };
+    private readonly Button _browseKey = new() { Content = "Browse ...", Padding = new Thickness(14, 7), Classes = { "secondary" } };
+    private readonly TextBlock _credentialsHeading = Text("Password", 19, weight: FontWeight.SemiBold);
+    private readonly TextBlock _credentialsHelp = Text("", 13, "Pro.Muted");
+    private readonly ContentControl _credentials = new();
+    private Control? _passwordPanel, _keyPanel;
+    private bool UseKey => _keyLogin || _useKey.IsChecked == true;
+    // The question with the password or the key: third for Install New Server, second for the key-login wizards.
+    private int CredentialsIndex => _keyLogin ? 1 : 2;
+    // The key list follows the server until you pick a key yourself.
+    private bool _keyPickedByUser, _settingKeys;
     private readonly Step[] _steps;
     private readonly Control[] _questions;
     private int _index;
@@ -53,7 +78,6 @@ public sealed class ServerWizard : IAsyncDisposable
     private string? _siteUrl;
     private readonly StackPanel _buttons = new() { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
 
-    // Connect step
     private readonly AvaloniaList<string> _logLines = [];
     private readonly LogView _log;
     private readonly ProgressBar _progress = new() { IsIndeterminate = true, Height = 3, MinHeight = 3, Foreground = Solid(Brand) };
@@ -61,7 +85,6 @@ public sealed class ServerWizard : IAsyncDisposable
     private readonly ResultBanner _result = new();
     private readonly Control _connectBody;
 
-    // SSH key step
     private readonly SshKeyStep _keyStep = new();
     private KeyStepOutcome? _keyOutcome;
 
@@ -75,7 +98,7 @@ public sealed class ServerWizard : IAsyncDisposable
             "The Octane browser client: the hotel's user interface."),
         new CloneStep("Renderer", "Octane-Renderer", "duckietm/Octane-Renderer", "/var/www/Octane-Renderer",
             "The Octane Renderer: draws rooms, avatars and furniture for Octane."),
-        new EmulatorStep(), new WebAccessStep(), new OctaneStep(), new HardenStep()
+        new EmulatorStep(), new WebAccessStep(), new OctaneStep(), new HardenStep(), new SshLoginStep()
     ];
 
     // Install steps after the SSH key, in order.
@@ -103,7 +126,6 @@ public sealed class ServerWizard : IAsyncDisposable
     private bool OnKeyStep => _index == KeyIndex;
     private int FirstInstallIndex => _steps.Length + (_keyLogin ? 1 : 2);
     private bool OnInstallStep => _index >= FirstInstallIndex && _index < FirstInstallIndex + _installSteps.Length;
-    // Index of the summary page.
     private int FinishIndex => FirstInstallIndex + _installSteps.Length;
     private bool OnFinishStep => _index == FinishIndex;
     // Only meaningful while OnInstallStep.
@@ -125,24 +147,31 @@ public sealed class ServerWizard : IAsyncDisposable
         _steps = keyLogin ?
         [
             new("Server", "IP / Hostname", Icons.Server, "Server IP / Hostname",
-                "The server you installed with Install New Server, as you entered it there (with :port for another SSH port). " +
-                "The installer logs in as root with the SSH key it saved for that server in configuration/keys/<server>/.", _host),
-            new("Key", "SSH key password", Icons.Key, "SSH key password",
-                "The password you gave the SSH key when it was generated. Leave it empty when the key has no password.", _keyPassword)
+                "The server you installed with Install New Server (with :port for another SSH port). The installer logs in as root with your SSH key.", _host),
+            new("Key", "Your SSH key", Icons.Key, "Your SSH key", "", _keyPassword)
         ] :
         [
             new("Server", "IP / Hostname", Icons.Server, "Server IP / Hostname",
                 "The address of the Ubuntu Server or Debian machine. SSH must be reachable (port 22 unless you add another one).", _host),
-            new("Account", "User account", Icons.Account, "User account",
-                "The account to log in with. When it is not root, the installer switches to root with sudo.", _user),
-            new("Password", "Login password", Icons.Key, "Password",
-                "Used for the SSH login and, for a non-root account, for sudo. It is only kept in memory while the installer runs.", _password)
+            new("Account", "User & login", Icons.Account, "User account and login",
+                "How do you log in to this server? With a password, or with your own SSH key when the server was deployed with one (no password needed). " +
+                "When the account is not root, the installer switches to root with sudo.", _user, LoginMethodChoice()),
+            new("Password", "Login password", Icons.Key, "Password", "", _password)
         ];
         // Built once: a TextBox can only have one parent, so the panels are reused when the user steps back.
-        _questions = _steps.Select(BuildQuestion).ToArray();
+        _questions = _steps.Select((step, i) => i == (keyLogin ? 1 : 2) ? BuildCredentialsQuestion() : BuildQuestion(step)).ToArray();
+        UpdateLoginMethod();
+        _usePassword.IsCheckedChanged += (_, _) => UpdateLoginMethod();
+        _useKey.IsCheckedChanged += (_, _) => UpdateLoginMethod();
+        _browseKey.Click += async (_, _) => await BrowseKeyAsync();
         _log = new LogView(_logLines) { Height = 220 };
         _connectBody = BuildConnectBody();
 
+        _keyChoice.SelectionChanged += (_, _) =>
+        {
+            _validation.Text = "";
+            if (!_settingKeys) _keyPickedByUser = true;
+        };
         foreach (TextBox box in new[] { _host, _user, _password, _keyPassword })
         {
             box.FontSize = 14;
@@ -248,14 +277,28 @@ public sealed class ServerWizard : IAsyncDisposable
         Render();
     }
 
+    /// <summary>Fills in the default server and key from Settings while nothing is typed yet. Called each time the page is shown.</summary>
+    public void ApplySettings()
+    {
+        if (IsBusy || Connection is not null || _index > ConnectIndex) return;
+        InstallerSettings settings = InstallerSettings.Load();
+        if (string.IsNullOrWhiteSpace(_host.Text) && settings.DefaultServer is { Length: > 0 } server) _host.Text = server;
+        // With a default key, the key is the likely way in. Both buttons are set because radio groups only
+        // switch each other while they are on screen.
+        if (!_keyLogin && settings.DefaultKeyPath is not null && string.IsNullOrEmpty(_password.Text))
+        {
+            _usePassword.IsChecked = false;
+            _useKey.IsChecked = true;
+        }
+        UpdateLoginMethod();
+    }
+
     public void FocusCurrentStep() =>
         Dispatcher.UIThread.Post(() =>
         {
             if (OnQuestion) _steps[_index].Input?.Focus();
             else if (OnKeyStep && !_keyStep.ShowingRun) _keyStep.FocusInput();
         }, DispatcherPriority.Background);
-
-    // ---------------------------------------------------------------- navigation
 
     private void Back()
     {
@@ -316,8 +359,6 @@ public sealed class ServerWizard : IAsyncDisposable
             if (host.Length == 0 || host.Any(char.IsWhiteSpace)) return "That is not a valid IP address or hostname.";
             if (port is < 1 or > 65535) return "The SSH port must be between 1 and 65535.";
             if (Uri.CheckHostName(host) == UriHostNameType.Unknown) return "That is not a valid IP address or hostname.";
-            if (_keyLogin && ClientConfiguration.SavedPrivateKeys(host).Count == 0)
-                return $"There is no SSH key for {host} in configuration/keys/{host}/. Run Install New Server (its SSH key step) for this server first, from this computer.";
             return null;
         }
         if (input == _user)
@@ -328,10 +369,20 @@ public sealed class ServerWizard : IAsyncDisposable
             return null;
         }
         if (input == _password) return string.IsNullOrEmpty(_password.Text) ? "Enter the password." : null;
+        if (input == _keyPassword && UseKey)
+        {
+            if (_keyChoice.SelectedItem is not KeyChoice key) return "Choose your private key, or Browse for it.";
+            try
+            {
+                SshKeys.PublicKeyOf(File.ReadAllText(key.Path), _keyPassword.Text ?? "", "");
+            }
+            catch (Exception ex) when (ex is SshKeys.KeyPasswordException or FormatException or IOException or UnauthorizedAccessException)
+            {
+                return ex.Message;
+            }
+        }
         return null;
     }
-
-    // ---------------------------------------------------------------- rendering
 
     private void Render()
     {
@@ -373,6 +424,8 @@ public sealed class ServerWizard : IAsyncDisposable
             return;
         }
 
+        // The key list follows the server typed on the first page.
+        if (_index == CredentialsIndex && UseKey) RefreshKeyChoices();
         _body.Content = _questions[_index];
         if (_index > 0) _buttons.Children.Add(_back);
         _next.Content = _index == _steps.Length - 1 ? "Connect" : "Next";
@@ -458,6 +511,7 @@ public sealed class ServerWizard : IAsyncDisposable
         var panel = new StackPanel { Spacing = 8, MaxWidth = 620, HorizontalAlignment = HorizontalAlignment.Left };
         panel.Children.Add(Text(step.Heading, 19, weight: FontWeight.SemiBold));
         panel.Children.Add(Text(step.Help, 13, "Pro.Muted"));
+        if (step.Extra is not null) panel.Children.Add(step.Extra);
         if (step.Input is not null)
         {
             step.Input.Margin = new Thickness(0, 8, 0, 0);
@@ -466,6 +520,114 @@ public sealed class ServerWizard : IAsyncDisposable
         Grid.SetColumn(panel, 1);
         grid.Children.Add(panel);
         return grid;
+    }
+
+    private Control LoginMethodChoice()
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 18, Margin = new Thickness(0, 6, 0, 0) };
+        row.Children.Add(_usePassword);
+        row.Children.Add(_useKey);
+        return row;
+    }
+
+    // The third question: the password, or the SSH key and its password, depending on the login method.
+    private Control BuildCredentialsQuestion()
+    {
+        _password.Margin = new Thickness(0, 8, 0, 0);
+        _passwordPanel = _password;
+        var keyRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+        keyRow.Children.Add(_keyChoice);
+        keyRow.Children.Add(_browseKey);
+        var keyPanel = new StackPanel { Spacing = 8 };
+        keyPanel.Children.Add(keyRow);
+        keyPanel.Children.Add(Text("Password of the key (empty when it has none)", 12, "Pro.Muted", FontWeight.SemiBold));
+        keyPanel.Children.Add(_keyPassword);
+        _keyPanel = keyPanel;
+
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 18 };
+        var icon = Icon(Icons.Key, 22);
+        icon.Foreground = Solid(Brand);
+        grid.Children.Add(new Border
+        {
+            Width = 46,
+            Height = 46,
+            CornerRadius = new CornerRadius(12),
+            VerticalAlignment = VerticalAlignment.Top,
+            Background = Solid(Color.FromArgb(0x26, Brand.R, Brand.G, Brand.B)),
+            Child = icon
+        });
+        var panel = new StackPanel { Spacing = 8, MaxWidth = 720, HorizontalAlignment = HorizontalAlignment.Left };
+        panel.Children.Add(_credentialsHeading);
+        panel.Children.Add(_credentialsHelp);
+        panel.Children.Add(_credentials);
+        Grid.SetColumn(panel, 1);
+        grid.Children.Add(panel);
+        return grid;
+    }
+
+    private void UpdateLoginMethod()
+    {
+        int i = CredentialsIndex;
+        if (UseKey)
+        {
+            _steps[i] = _steps[i] with { Title = _keyLogin ? "Key" : "SSH key", Caption = "Your private key", Input = _keyPassword };
+            _credentialsHeading.Text = "Your SSH key";
+            _credentialsHelp.Text = (_keyLogin ? "The private key to log in as root. " : "The private key whose public key is on the server (for this account). ") +
+                                    "All keys in configuration/keys are listed (the SSH key step and Settings put them there): the default key from Settings, " +
+                                    "or else one in the folder of this server, is selected. Browse picks another file (OpenSSH, PEM or PuTTY .ppk). It never leaves this computer.";
+            _credentials.Content = _keyPanel;
+            RefreshKeyChoices();
+        }
+        else
+        {
+            _steps[i] = _steps[i] with { Title = "Password", Caption = "Login password", Input = _password };
+            _credentialsHeading.Text = "Password";
+            _credentialsHelp.Text = "Used for the SSH login and, for a non-root account, for sudo. It is only kept in memory while the installer runs.";
+            _credentials.Content = _passwordPanel;
+        }
+        RenderStepper();
+    }
+
+    // Keeps a browsed key in the list.
+    private readonly List<string> _browsedKeys = [];
+
+    // Selects, in order: the key you picked, the default key from Settings, a key in a folder named after the
+    // server (keys/192.168.0.8, or keys/Server-192.168.0.8), the newest key.
+    private void RefreshKeyChoices()
+    {
+        string? picked = _keyPickedByUser ? (_keyChoice.SelectedItem as KeyChoice)?.Path : null;
+        string? preset = InstallerSettings.Load().DefaultKeyPath;
+        var paths = _browsedKeys.Concat(ClientConfiguration.AllPrivateKeys()).Distinct().ToList();
+        if (preset is not null && !paths.Contains(preset)) paths.Insert(0, preset);
+
+        string host = ServerLogin.ParseHost(_host.Text ?? "").Host;
+        string Folder(string path) => Path.GetFileName(Path.GetDirectoryName(path)) ?? "";
+        string? forHost = host.Length == 0 ? null
+            : paths.FirstOrDefault(p => Folder(p).Equals(host, StringComparison.OrdinalIgnoreCase))
+              ?? paths.FirstOrDefault(p => Folder(p).Contains(host, StringComparison.OrdinalIgnoreCase));
+
+        var items = paths.Select(p => new KeyChoice(p)).ToList();
+        string? choose = picked ?? preset ?? forHost;
+        _settingKeys = true;
+        _keyChoice.ItemsSource = items;
+        _keyChoice.SelectedItem = items.FirstOrDefault(k => k.Path == choose) ?? items.FirstOrDefault();
+        _settingKeys = false;
+        _keyChoice.PlaceholderText = items.Count == 0 ? "No keys in configuration/keys: Browse for your private key" : null;
+    }
+
+    private async Task BrowseKeyAsync()
+    {
+        if (TopLevel.GetTopLevel(View) is not { } top) return;
+        var options = new FilePickerOpenOptions { Title = "Select your private SSH key", AllowMultiple = false };
+        string sshFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
+        if (Directory.Exists(sshFolder)) options.SuggestedStartLocation = await top.StorageProvider.TryGetFolderFromPathAsync(sshFolder);
+        IReadOnlyList<IStorageFile> files = await top.StorageProvider.OpenFilePickerAsync(options);
+        if (files.Count == 0 || files[0].TryGetLocalPath() is not { } path) return;
+        _browsedKeys.Remove(path);
+        _browsedKeys.Insert(0, path);
+        RefreshKeyChoices();
+        _keyChoice.SelectedItem = (_keyChoice.ItemsSource as IEnumerable<KeyChoice>)?.FirstOrDefault(k => k.Path == path);
+        _keyPickedByUser = true;
     }
 
     private Control BuildConnectBody()
@@ -763,14 +925,14 @@ public sealed class ServerWizard : IAsyncDisposable
         }
     }
 
-    // ---------------------------------------------------------------- connecting
-
     private async Task ConnectAsync()
     {
         (string host, int port) = ServerLogin.ParseHost(_host.Text ?? "");
         var login = _keyLogin
-            ? new ServerLogin(host, port, "root", "", ClientConfiguration.SavedPrivateKeys(host), _keyPassword.Text ?? "")
-            : new ServerLogin(host, port, _user.Text!.Trim(), _password.Text ?? "");
+            ? new ServerLogin(host, port, "root", "", [((KeyChoice)_keyChoice.SelectedItem!).Path], _keyPassword.Text ?? "")
+            : UseKey
+                ? new ServerLogin(host, port, _user.Text!.Trim(), "", [((KeyChoice)_keyChoice.SelectedItem!).Path], _keyPassword.Text ?? "")
+                : new ServerLogin(host, port, _user.Text!.Trim(), _password.Text ?? "");
 
         IsBusy = true;
         _logLines.Clear();
@@ -833,6 +995,15 @@ public sealed class ServerWizard : IAsyncDisposable
         await Connection.DisposeAsync();
         Connection = null;
         SetStatus($"Disconnected from {host}.");
+    }
+
+    /// <summary>Disconnects and goes back to the first page (like the Disconnect button), for a workspace outside the wizard.</summary>
+    public async Task DisconnectAndResetAsync()
+    {
+        if (IsBusy) return;
+        await DisconnectAsync();
+        _index = 0;
+        Render();
     }
 
     /// <summary>For a workspace on the last page (Tools): busy hides the buttons and blocks leaving the page.</summary>

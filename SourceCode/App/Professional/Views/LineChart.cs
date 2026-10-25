@@ -4,10 +4,7 @@ using Avalonia.Media;
 
 namespace AllInOneInstaller.App.Professional.Views;
 
-/// <summary>
-/// A rolling line graph: one or more series of the last <see cref="Capacity"/> values, newest on the right, each
-/// with a light fill. The top of the graph is <see cref="Maximum"/>, or the largest value when that is 0.
-/// </summary>
+/// <summary>Rolling line graph of the last <see cref="Capacity"/> values per series, newest on the right.</summary>
 public sealed class LineChart : Control
 {
     public sealed class Series(Color color)
@@ -26,7 +23,7 @@ public sealed class LineChart : Control
     }
 
     public int Capacity { get; init; } = 60;
-    /// <summary>Fixed top value (100 for percentages); 0 scales to the data.</summary>
+    /// <summary>Fixed top of the graph, or 0 to scale to the data.</summary>
     public double Maximum { get; init; }
     public IReadOnlyList<Series> Lines { get; }
 
@@ -54,7 +51,6 @@ public sealed class LineChart : Control
         InvalidateVisual();
     }
 
-    /// <summary>The value at the top of the graph.</summary>
     public double Top
     {
         get

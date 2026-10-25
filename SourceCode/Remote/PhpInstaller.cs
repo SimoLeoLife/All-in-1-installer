@@ -95,14 +95,14 @@ public static class PhpInstaller
 
             echo "> Adding https://packages.sury.org/php/ ($codename)"
             echo "deb [signed-by=/usr/share/keyrings/debsuryorg-archive-keyring.gpg] https://packages.sury.org/php/ $codename main" > /etc/apt/sources.list.d/php.list
-            # PHP 8.5 always from Sury, also where the distribution has its own (older) 8.5 packages.
+            # Always take PHP 8.5 from Sury, even where the distribution has its own older 8.5 packages.
             printf 'Package: php8.5*\nPin: origin packages.sury.org\nPin-Priority: 900\n' > /etc/apt/preferences.d/99sury-php
             apt_update
             """;
         return RemoteScript.RunAsync(connection, script, log, "Adding the PHP repository failed", token);
     }
 
-    /// <summary>Fails on a PHP older than <see cref="MinimumVersion"/>; returns the installed version.</summary>
+    /// <summary>Fails on a PHP older than <see cref="MinimumVersion"/> and returns the installed version.</summary>
     public static async Task<string> InstallPackagesAsync(ServerConnection connection, Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
@@ -111,7 +111,7 @@ public static class PhpInstaller
             apt-get install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold {{string.Join(' ', Packages)}}
             v=$(php8.5 -r 'echo PHP_VERSION;')
             dpkg --compare-versions "$v" ge {{MinimumVersion}} || fail "PHP $v is installed, but at least {{MinimumVersion}} is required: older versions have security problems."
-            # 'php' on the command line is 8.5, also when other versions are installed.
+            # Make 'php' on the command line 8.5 even when other versions are installed.
             update-alternatives --set php /usr/bin/php8.5 >/dev/null 2>&1 || true
             echo "VERSION=$v"
             """;
@@ -161,7 +161,7 @@ public static class PhpInstaller
               exit 0
             fi
 
-            # nginx.org's NGINX runs as 'nginx'; the PHP-FPM socket belongs to www-data (mode 660).
+            # nginx.org's NGINX runs as 'nginx', but the PHP-FPM socket belongs to www-data with mode 660.
             if id nginx >/dev/null 2>&1 && ! id -nG nginx | grep -qw www-data; then
               usermod -aG www-data nginx
               echo "  user nginx added to group www-data (for the PHP-FPM socket)"
@@ -192,7 +192,7 @@ public static class PhpInstaller
             }
 
             echo "> Testing PHP through NGINX"
-            # Temporary site on 127.0.0.1:8085; PHP-FPM has a private /tmp, so the test file lives in /var/www.
+            # Temporary site on 127.0.0.1:8085. PHP-FPM has a private /tmp, so the test file lives in /var/www.
             root=$(mktemp -d /var/www/aio-php-test.XXXXXX 2>/dev/null || { install -d -m 755 /var/www; mktemp -d /var/www/aio-php-test.XXXXXX; })
             conf=/etc/nginx/conf.d/zz-aio-php-test.conf
             cleanup() { rm -rf "$root"; rm -f "$conf"; reload >/dev/null 2>&1 || true; }

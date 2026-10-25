@@ -11,12 +11,12 @@ using Avalonia.Styling;
 namespace AllInOneInstaller.App.Professional;
 
 /// <summary>
-/// Colours, button styles and icons of the Professional windows. Colours that differ between the light and
-/// dark system theme are resources ("Pro.*"), bound with <see cref="Bind"/> so a theme switch repaints them.
+/// Colours, button styles and icons for the Professional windows. Theme-dependent colours are "Pro.*" resources
+/// bound with <see cref="Bind"/>, so switching between light and dark repaints them.
 /// </summary>
 public static class ProfessionalTheme
 {
-    // Same in both themes.
+    // These colours are the same in both themes.
     public static readonly Color Brand = Color.Parse("#4F5FE6");
     public static readonly Color BrandHover = Color.Parse("#4352D4");
     public static readonly Color BrandPressed = Color.Parse("#3744B8");
@@ -58,7 +58,7 @@ public static class ProfessionalTheme
 
     private static bool _installed;
 
-    /// <summary>Adds the theme resources and button styles; later calls do nothing.</summary>
+    /// <summary>Adds the theme resources and button styles. Calls after the first do nothing.</summary>
     public static void Install(Application app)
     {
         if (_installed) return;
@@ -81,21 +81,20 @@ public static class ProfessionalTheme
     {
         IBrush brand = new SolidColorBrush(Brand);
 
-        // primary: the one main action of a view
+        // The one main action of a view.
         ButtonClass(styles, "primary",
             normal: (brand, Brushes.White, Brushes.Transparent),
             hover: (new SolidColorBrush(BrandHover), Brushes.White, Brushes.Transparent),
             pressed: (new SolidColorBrush(BrandPressed), Brushes.White, Brushes.Transparent),
             disabled: (Res("Pro.Disabled"), Res("Pro.DisabledText"), Brushes.Transparent));
 
-        // secondary: bordered neutral button
         ButtonClass(styles, "secondary",
             normal: (Res("Pro.Card"), Res("Pro.Text"), Res("Pro.CardBorderStrong")),
             hover: (Res("Pro.Hover"), Res("Pro.Text"), Res("Pro.CardBorderStrong")),
             pressed: (Res("Pro.Pressed"), Res("Pro.Text"), Res("Pro.CardBorderStrong")),
             disabled: (Res("Pro.Card"), Res("Pro.DisabledText"), Res("Pro.CardBorder")));
 
-        // row: an entry of the operation list
+        // Entries in the operation list.
         ButtonClass(styles, "row",
             normal: (Brushes.Transparent, Res("Pro.Text"), Brushes.Transparent),
             hover: (Res("Pro.Hover"), Res("Pro.Text"), Brushes.Transparent),
@@ -107,14 +106,13 @@ public static class ProfessionalTheme
             pressed: (Res("Pro.Selected"), Res("Pro.Text"), Brushes.Transparent),
             disabled: (Res("Pro.Selected"), Res("Pro.Text"), Brushes.Transparent));
 
-        // tile: a clickable card
+        // Clickable cards.
         ButtonClass(styles, "tile",
             normal: (Res("Pro.Card"), Res("Pro.Text"), Res("Pro.CardBorder")),
             hover: (Res("Pro.Card"), Res("Pro.Text"), brand),
             pressed: (Res("Pro.Hover"), Res("Pro.Text"), brand),
             disabled: (Res("Pro.Card"), Res("Pro.Text"), Res("Pro.CardBorder")));
 
-        // nav: sidebar entries
         IBrush sidebarSelected = new SolidColorBrush(SidebarSelected);
         ButtonClass(styles, "nav",
             normal: (Brushes.Transparent, new SolidColorBrush(SidebarText), Brushes.Transparent),
@@ -128,7 +126,8 @@ public static class ProfessionalTheme
             disabled: (sidebarSelected, new SolidColorBrush(SidebarText), Brushes.Transparent));
     }
 
-    /// <summary>One style per state; Fluent paints hover/pressed/disabled on the template's ContentPresenter.</summary>
+    // Fluent paints the hover, pressed and disabled states on the template's ContentPresenter, so those states
+    // are styled there rather than on the button.
     private static void ButtonClass(Styles styles, string classes,
         (object Back, object Fore, object Border) normal,
         (object Back, object Fore, object Border) hover,
@@ -161,7 +160,7 @@ public static class ProfessionalTheme
 
     private static DynamicResourceExtension Res(string key) => new(key);
 
-    /// <summary>Binds a property to a theme resource, so it follows the light/dark switch.</summary>
+    /// <summary>Binds a property to a theme resource so it follows light and dark mode.</summary>
     public static T Bind<T>(this T control, AvaloniaProperty property, string key) where T : Control
     {
         control.Bind(property, control.GetResourceObservable(key));
@@ -170,7 +169,6 @@ public static class ProfessionalTheme
 
     public static IBrush Solid(Color color) => new SolidColorBrush(color);
 
-    /// <summary>A text block whose colour is a theme resource key.</summary>
     public static TextBlock Text(string text, double size = 13, string color = "Pro.Text", FontWeight? weight = null) =>
         new TextBlock { Text = text, FontSize = size, FontWeight = weight ?? FontWeight.Normal, TextWrapping = TextWrapping.Wrap }
             .Bind(TextBlock.ForegroundProperty, color);
@@ -186,7 +184,7 @@ public static class ProfessionalTheme
         .Bind(Border.BackgroundProperty, "Pro.Card")
         .Bind(Border.BorderBrushProperty, "Pro.CardBorder");
 
-    /// <summary>A small rounded label, e.g. CAUTION or INPUT.</summary>
+    /// <summary>A small rounded label such as CAUTION.</summary>
     public static Border Chip(string text, string back, string fore) =>
         new Border
         {
@@ -199,6 +197,22 @@ public static class ProfessionalTheme
         .Bind(Border.BackgroundProperty, back);
 
     public static Ellipse Dot(double size = 8) => new() { Width = size, Height = size, VerticalAlignment = VerticalAlignment.Center };
+
+    /// <summary>Appends a row with one vertically centred cell per column.</summary>
+    public static void AddGridRow(Grid grid, params Control[] cells)
+    {
+        int row = grid.RowDefinitions.Count;
+        grid.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+        for (int i = 0; i < cells.Length; i++)
+        {
+            cells[i].VerticalAlignment = VerticalAlignment.Center;
+            Grid.SetRow(cells[i], row);
+            Grid.SetColumn(cells[i], i);
+            grid.Children.Add(cells[i]);
+        }
+    }
+
+    public static readonly FontFamily Mono = new("Cascadia Mono, Consolas, DejaVu Sans Mono, Menlo, monospace");
 
     public static PathIcon Icon(string data, double size = 18) =>
         new() { Data = Geometry.Parse(data), Width = size, Height = size };
@@ -228,6 +242,11 @@ public static class ProfessionalTheme
         public const string Close = "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z";
         public const string Globe = "M16.36,14C16.44,13.34 16.5,12.68 16.5,12C16.5,11.32 16.44,10.66 16.36,10H19.74C19.9,10.64 20,11.31 20,12C20,12.69 19.9,13.36 19.74,14M14.59,19.56C15.19,18.45 15.65,17.25 15.97,16H18.92C17.96,17.65 16.43,18.93 14.59,19.56M14.34,14H9.66C9.56,13.34 9.5,12.68 9.5,12C9.5,11.32 9.56,10.65 9.66,10H14.34C14.43,10.65 14.5,11.32 14.5,12C14.5,12.68 14.43,13.34 14.34,14M12,19.96C11.17,18.76 10.5,17.43 10.09,16H13.91C13.5,17.43 12.83,18.76 12,19.96M8,8H5.08C6.03,6.34 7.57,5.06 9.4,4.44C8.8,5.55 8.35,6.75 8,8M5.08,16H8C8.35,17.25 8.8,18.45 9.4,19.56C7.57,18.93 6.03,17.65 5.08,16M4.26,14C4.1,13.36 4,12.69 4,12C4,11.31 4.1,10.64 4.26,10H7.64C7.56,10.66 7.5,11.32 7.5,12C7.5,12.68 7.56,13.34 7.64,14M12,4.03C12.83,5.23 13.5,6.57 13.91,8H10.09C10.5,6.57 11.17,5.23 12,4.03M18.92,8H15.97C15.65,6.75 15.19,5.55 14.59,4.44C16.43,5.07 17.96,6.34 18.92,8M12,2C6.47,2 2,6.5 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z";
         public const string History ="M13.5,8H12V13L16.28,15.54L17,14.33L13.5,12.25V8M13,3A9,9 0 0,0 4,12H1L4.96,16.03L9,12H6A7,7 0 0,1 13,5A7,7 0 0,1 20,12A7,7 0 0,1 13,19C11.07,19 9.32,18.21 8.06,16.94L6.64,18.36C8.27,20 10.5,21 13,21A9,9 0 0,0 22,12A9,9 0 0,0 13,3Z";
+        public const string Console = "M20,19V7H4V19H20M20,3A2,2 0 0,1 22,5V19A2,2 0 0,1 20,21H4A2,2 0 0,1 2,19V5C2,3.89 2.9,3 4,3H20M13,17V15H18V17H13M9.58,13L5.57,9H8.4L11.7,12.3C12.09,12.69 12.09,13.33 11.7,13.72L8.42,17H5.59L9.58,13Z";
+        public const string ArrowUp = "M13,20H11V8L5.5,13.5L4.08,12.08L12,4.16L19.92,12.08L18.5,13.5L13,8V20Z";
+        public const string Image = "M8.5,13.5L11,16.5L14.5,12L19,18H5M21,19V5C21,3.89 20.1,3 19,3H5A2,2 0 0,0 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19Z";
+        public const string File = "M13,9V3.5L18.5,9M6,2C4.89,2 4,2.89 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2H6Z";
+        public const string FolderSync = "M4,4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4H4M12.5,9L16,12.5L12.5,16V13.5H8V11.5H12.5V9Z";
         public const string Puzzle = "M20.5,11H19V7C19,5.89 18.1,5 17,5H13V3.5A2.5,2.5 0 0,0 10.5,1A2.5,2.5 0 0,0 8,3.5V5H4A2,2 0 0,0 2,7V10.8H3.5C5,10.8 6.2,12 6.2,13.5C6.2,15 5,16.2 3.5,16.2H2V20A2,2 0 0,0 4,22H7.8V20.5C7.8,19 9,17.8 10.5,17.8C12,17.8 13.2,19 13.2,20.5V22H17A2,2 0 0,0 19,20V16H20.5A2.5,2.5 0 0,0 23,13.5A2.5,2.5 0 0,0 20.5,11Z";
     }
 }

@@ -4,14 +4,14 @@ namespace AllInOneInstaller.Remote;
 public sealed record WebAccessSettings(string Address, bool Https, bool Cloudflare, bool AtomCms = false)
 {
     public string Scheme => Https ? "https" : "http";
-    /// <summary>Where Octane is served: "/" or "/client/".</summary>
+    /// <summary>Where Octane is served, "/" or "/client/".</summary>
     public string ClientPath => AtomCms ? "/client/" : "/";
     public string ClientUrl => Url + ClientPath;
     public string Url => $"{Scheme}://{(Address.Contains(':') ? $"[{Address}]" : Address)}";
-    /// <summary>Traefik then answers for every host name.</summary>
+    /// <summary>For a bare IP address Traefik answers for every host name.</summary>
     public bool IsIpAddress => System.Net.IPAddress.TryParse(Address, out _);
 
-    /// <summary>The settings in /opt/traefik/hotel.env, as printed with a conf_ prefix; null before the web access step.</summary>
+    /// <summary>Reads /opt/traefik/hotel.env as printed with a conf_ prefix. Null before the web access step.</summary>
     public static WebAccessSettings? FromHotelEnv(ScriptValues values) =>
         values["conf_ADDRESS"] is { } address
             ? new WebAccessSettings(address, values["conf_SCHEME"] == "https", values.Yes("conf_CLOUDFLARE"), values["conf_CMS"] == "atom")
@@ -50,7 +50,7 @@ public static class WebAccessInstaller
     /// <summary>"Docker Release (CE deb)" key from download.docker.com/linux/&lt;distro&gt;/gpg.</summary>
     public const string DockerKeyFingerprint = "9DC858229FC7DD38854AE2D88D81803C0EBFCD88";
 
-    // Every key currently in Docker's gpg file; any other key is refused.
+    // Every key currently in Docker's gpg file. Any other key is refused.
     private static readonly string[] KnownDockerKeys = [DockerKeyFingerprint, "D3306A018370199E527AE7997EA0A9C3F273FCD8"];
 
     /// <summary>From docs.docker.com/engine/install, "Uninstall old versions".</summary>
@@ -59,7 +59,7 @@ public static class WebAccessInstaller
     // Go template braces cannot appear in the $$ raw strings.
     private const string GoRunning = "{{.State.Running}}";
 
-    // Process name listening on the port, e.g. "nginx" or "docker-proxy"; empty when none.
+    // Name of the process listening on the port, or empty when there is none.
     private static string PortOwner(int port) =>
         $"ss -Hltnp 'sport = :{port}' 2>/dev/null | grep -oE 'users:\\(\\(\"[^\"]+\"' | head -1 | cut -d'\"' -f2";
 
@@ -118,7 +118,7 @@ public static class WebAccessInstaller
             echo "  key {{DockerKeyFingerprint}} checked"
             install -m 0644 "$tmp" /etc/apt/keyrings/docker.asc
             rm -f "$tmp"
-            # The format docs.docker.com uses now; an older docker.list would add the same repository twice.
+            # The format docs.docker.com uses now. An older docker.list would add the same repository twice.
             rm -f /etc/apt/sources.list.d/docker.list
             cat > /etc/apt/sources.list.d/docker.sources <<EOF
             Types: deb
@@ -190,8 +190,8 @@ public static class WebAccessInstaller
             install -d -m 755 "$t" "$t/dynamic"
             install -d -m 700 "$t/letsencrypt"
 
-            # Which proxies may set X-Forwarded-For: only Cloudflare (when used); otherwise Traefik writes the
-            # visitor's address itself, so the header cannot be faked.
+            # Only Cloudflare, when used, may set X-Forwarded-For. Otherwise Traefik writes the visitor's
+            # address itself, so the header cannot be faked.
             trusted=
             if [ {{(settings.Cloudflare ? "yes" : "no")}} = yes ]; then
               load_cloudflare_ranges
@@ -218,8 +218,8 @@ public static class WebAccessInstaller
 
             {{RoutesScript(settings)}}
 
-            # Host network: Traefik reaches NGINX and Polaris on 127.0.0.1, and Polaris sees 127.0.0.1 as the
-            # (trusted) proxy that sets X-Forwarded-For.
+            # With the host network Traefik reaches NGINX and Polaris on 127.0.0.1, and Polaris trusts 127.0.0.1
+            # as the proxy that sets X-Forwarded-For.
             echo "> $t/compose.yaml"
             cat > "$t/compose.yaml" <<'EOF'
             # Traefik for the hotel (written by All-in-1 Installer). Update: docker compose pull && docker compose up -d
@@ -262,11 +262,11 @@ public static class WebAccessInstaller
         return RemoteScript.RunAsync(connection, script, log, "Setting up Traefik failed", token);
     }
 
-    /// <summary>Polaris' own /api paths. With AtomCMS only these go to Polaris: the CMS has an /api of its own.</summary>
+    /// <summary>Polaris' own /api paths. With AtomCMS only these go to Polaris because the CMS has its own /api.</summary>
     public static readonly string[] PolarisApiPaths =
         ["auth", "authx", "badges", "cms", "emustats", "health", "housekeeping", "maintenance", "public", "wired"];
 
-    /// <summary>Writes dynamic/hotel.yml and hotel.env in $t; Traefik picks up the routes without a restart.</summary>
+    // Writes dynamic/hotel.yml and hotel.env in $t. Traefik picks up the routes without a restart.
     private static string RoutesScript(WebAccessSettings settings)
     {
         string entryPoint = settings.Https ? "websecure" : "web";
@@ -313,7 +313,7 @@ public static class WebAccessInstaller
             """;
     }
 
-    /// <summary>Rewrites only the routes (for the AtomCMS addon); Traefik itself keeps running.</summary>
+    /// <summary>Rewrites only the routes for the AtomCMS addon. Traefik itself keeps running.</summary>
     public static Task ConfigureRoutesAsync(ServerConnection connection, WebAccessSettings settings, Action<string> log,
         CancellationToken token = default)
     {
@@ -357,7 +357,7 @@ public static class WebAccessInstaller
         string origin = settings.Url;
         string script = RemoteScript.Prelude + $$"""
             url="{{settings.Scheme}}://{{name}}"
-            # --noproxy: these requests are for this server itself, never for an HTTP proxy set in the environment.
+            # --noproxy because these requests are for this server itself, never for a proxy set in the environment.
             c() { curl -s --noproxy '*' --max-time 10 --resolve "{{name}}:{{port}}:127.0.0.1" --resolve "{{name}}:80:127.0.0.1" "$@"; }
             {{(settings.IsIpAddress ? "c() { curl -s --noproxy '*' --max-time 10 -k \"$@\"; }; url=\"" + settings.Scheme + "://127.0.0.1\"" : "")}}
 
@@ -372,7 +372,7 @@ public static class WebAccessInstaller
               if [ $cert = no ]; then
                 problem=$(docker logs traefik 2>&1 | grep -iE 'acme|certificate' | grep -iE 'error|unable' | tail -1 \
                   | sed 's/.*error="//; s/" [A-Za-z][A-Za-z ]*=.*//; s/\\"/"/g' | cut -c1-300)
-                # (no apostrophe inside ${...:-...}: bash would take it as an open quote)
+                # No apostrophe inside ${...:-...}, because bash would take it as an open quote.
                 [ -n "$problem" ] || problem="no answer from Let's Encrypt yet"
                 echo "CERTPROBLEM=$problem"
                 echo "  No valid certificate yet: $problem"
@@ -386,7 +386,7 @@ public static class WebAccessInstaller
             echo "> $url/ (NGINX on port {{NginxPort}})"
             code=$(c $k -o /dev/null -w '%{http_code}' "$url/" || true)
             echo "  HTTP $code"
-            # 302: AtomCMS sends a new install to its installer.
+            # AtomCMS answers 302 on a new install to send visitors to its installer.
             case "$code" in 200|302|403) ;; *) fail "Traefik does not pass $url/ to NGINX (HTTP '$code'). See: docker logs traefik" ;; esac
             if [ "{{settings.Scheme}}" = https ]; then
               code=$(c -o /dev/null -w '%{http_code}' "http://{{name}}/" || true)

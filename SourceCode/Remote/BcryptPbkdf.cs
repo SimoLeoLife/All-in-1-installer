@@ -6,7 +6,7 @@ namespace AllInOneInstaller.Remote;
 
 /// <summary>
 /// OpenSSH's bcrypt_pbkdf, which derives the key of an encrypted "openssh-key-v1" private key.
-/// Port of OpenBSD's bcrypt_pbkdf.c; the Blowfish initial tables (digits of pi) are computed rather than listed.
+/// Port of OpenBSD's bcrypt_pbkdf.c. The Blowfish initial tables, which are digits of pi, are computed rather than listed.
 /// </summary>
 public static class BcryptPbkdf
 {
@@ -84,7 +84,7 @@ public static class BcryptPbkdf
             Array.Copy(pi, 18, _s, 0, 1024);
         }
 
-        // Blowfish_expandstate; Blowfish_expand0state when data is null.
+        // Blowfish_expandstate, or Blowfish_expand0state when data is null.
         public void ExpandState(byte[]? data, byte[] key)
         {
             int keyPos = 0;

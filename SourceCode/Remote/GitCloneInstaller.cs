@@ -14,7 +14,7 @@ public sealed record CloneState(
 /// <summary>Clones a GitHub repository on the server, or updates an existing clone.</summary>
 public static class GitCloneInstaller
 {
-    // Git separates progress updates with carriage returns; keep only the meaningful lines.
+    // Git separates progress updates with carriage returns. Keep only the meaningful lines.
     private const string QuietProgress =
         "tr '\\r' '\\n' | awk '/^Cloning|done\\.|^Updating files: .*done|^(warning|fatal|error)|Already up to date|Fast-forward|files? changed/ {print; fflush()}'";
 
@@ -25,7 +25,7 @@ public static class GitCloneInstaller
         string script = $$"""
             d={{dir}}
             if [ ! -d "$d" ] || [ -z "$(ls -A "$d" 2>/dev/null)" ]; then echo "kind=missing"; exit 0; fi
-            # safe.directory: the folder may belong to another account (the emulator step gives it to "emulator").
+            # safe.directory because the folder may belong to another account. The emulator step gives it to "emulator".
             origin=$(git -c safe.directory="$d" -C "$d" remote get-url origin 2>/dev/null)
             echo "origin=$origin"
             if [ -z "$origin" ] || ! git -c safe.directory="$d" -C "$d" rev-parse --show-toplevel 2>/dev/null | grep -qx "$(readlink -f "$d")"; then echo "kind=other"; exit 0; fi
@@ -105,14 +105,14 @@ public static class GitCloneInstaller
         string script = RemoteScript.Prelude + $$"""
             set -o pipefail
             d={{ServerConnection.ShellQuote(target)}}
-            # Octane with AtomCMS: package.json has the Octane step's --base=/client/. Undo only that for the pull;
-            # the Octane step and build.sh put it back.
+            # With AtomCMS the Octane step adds --base=/client/ to package.json. Undo only that for the pull,
+            # since the Octane step and build.sh put it back.
             if [ -f "$d/package.json" ] && grep -q -- '--base=' "$d/package.json" &&
                sed -E 's#("(start|build)": "vite) --base=[^ "]+#\1#' "$d/package.json" | cmp -s - <(git -c safe.directory="$d" -C "$d" show HEAD:package.json 2>/dev/null); then
               git -c safe.directory="$d" -C "$d" checkout -- package.json
               echo "  package.json: --base for /client/ undone for the pull (the Octane step sets it again)"
             fi
-            # The Octane update tool writes a new yarn.lock; the pull may bring its own.
+            # The Octane update tool writes a new yarn.lock, and the pull may bring its own.
             if git -c safe.directory="$d" -C "$d" ls-files --error-unmatch yarn.lock >/dev/null 2>&1 &&
                [ -n "$(git -c safe.directory="$d" -C "$d" status --porcelain -- yarn.lock)" ]; then
               git -c safe.directory="$d" -C "$d" checkout -- yarn.lock

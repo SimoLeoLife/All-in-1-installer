@@ -3,7 +3,7 @@ namespace AllInOneInstaller.Remote;
 /// <summary>Runs install scripts as root with live output.</summary>
 public static class RemoteScript
 {
-    // Prepended to every install script: set -e, noninteractive apt, $codename, fail() and shared helpers.
+    // Prepended to every install script.
     public const string Prelude = """
         set -e
         export DEBIAN_FRONTEND=noninteractive
@@ -43,7 +43,7 @@ public static class RemoteScript
         }
         apt_update() { fix_clock; apt-get update; }
 
-        # download URL FILE: curl with timeouts and retries, then once more over IPv4. Tools that download by
+        # download URL FILE, with timeouts and retries and a last attempt over IPv4. Tools that download by
         # themselves (composer-setup.php, mvnw) have no timeout and hang forever on a broken IPv6 route.
         download() {
           curl -fsSL --connect-timeout 20 --max-time 900 --retry 2 --retry-delay 5 -o "$2" "$1" && return 0

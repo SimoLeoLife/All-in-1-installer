@@ -20,9 +20,10 @@ public sealed class OctaneStep : InstallStep
             "Creates client-mode, hotlooks, infostand_backgrounds, news, renderer-config and ui-config .json from the .example files, with the hotel's URLs (wss:// for https, ws:// for http).",
             $"Creates the asset folders those files point to in {OctaneInstaller.Gamedata}, ready for the files from the All-in-1 download tool, and a welcome message in news/news.json.",
             "Runs yarn build and points the hotel site at /var/www/Octane/dist; /var/www/Octane/build.sh builds it again later.",
-            $"Camera: photos in {HotelSite.Camera} and generated badges in c_images/album1584 and groupbadge/ (the emulator's camera and imager settings; the emulator is stopped while they are set)."
+            $"Camera: photos in {HotelSite.Camera} and generated badges in c_images/album1584 and groupbadge/ (the emulator's camera and imager settings; the emulator is stopped while they are set).",
+            $"Copies the emulator's Assets/images (Octane's preload images: without them the client does not start) and Assets/badgeparts into {OctaneInstaller.Gamedata}; files already there are kept."
         ],
-        "The game assets are not copied: put them in /var/www/gamedata yourself (with the All-in-1 download tool). Existing configuration files are kept; only their URLs are updated.",
+        "The Habbo game assets are not copied: put them in /var/www/gamedata with Addons → Deploy Assets (the All-in-1 downloader). Existing configuration files are kept; only their URLs are updated.",
         [
             "Check the server",
             "Octane-Renderer: yarn install",
@@ -30,7 +31,8 @@ public sealed class OctaneStep : InstallStep
             "Configuration files and gamedata folders",
             "yarn build",
             "Serve dist/ and test",
-            "Camera and badge imager in the emulator"
+            "Camera and badge imager in the emulator",
+            "The emulator's images and group badge parts"
         ])
     {
     }
@@ -99,6 +101,9 @@ public sealed class OctaneStep : InstallStep
         // The emulator writes camera photos into gamedata/camera.
         bool camera = await Task.Run(() => EmulatorInstaller.ConfigureImagerAsync(connection, site.Url, Run.Log));
         Run.Done(camera ? $"{site.Url}/gamedata/camera/" : "emulator not set up yet");
+
+        int assets = await Task.Run(() => EmulatorAssetsInstaller.InstallAsync(connection, Run.Log));
+        Run.Done(assets > 0 ? $"{assets} files" : "already there");
 
         if (!camera)
             return await SucceededWithWarningAsync($"Octane is served on {site.ClientUrl}",

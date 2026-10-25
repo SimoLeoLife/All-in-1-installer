@@ -112,7 +112,7 @@ public sealed class HardenStep : InstallStep
         await Task.Run(() => HardenInstaller.ConfigureFirewallAsync(connection, site, state.SshPorts, Run.Log));
         Run.Done(site.Cloudflare ? "80/443 Cloudflare only" : "80/443 open");
 
-        // A new SSH login proves the firewall did not lock us out; this session stays open either way.
+        // A fresh SSH login proves the firewall still lets SSH in. This session stays open either way.
         Run.Log($"> Logging in again to {connection.Login.Host}:{connection.Login.Port} through the firewall ...");
         try
         {

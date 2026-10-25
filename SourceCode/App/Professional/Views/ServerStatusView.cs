@@ -9,10 +9,7 @@ using static AllInOneInstaller.App.Professional.ProfessionalTheme;
 
 namespace AllInOneInstaller.App.Professional.Views;
 
-/// <summary>
-/// Live server dashboard: CPU, memory, network graphs, disks, logged-in users, uptime and the git versions of
-/// the hotel. Samples every two seconds while it is on screen.
-/// </summary>
+/// <summary>Live server dashboard that samples every two seconds while it is on screen.</summary>
 public sealed class ServerStatusView : StackPanel
 {
     private static readonly TimeSpan Interval = TimeSpan.FromSeconds(2);
@@ -46,7 +43,7 @@ public sealed class ServerStatusView : StackPanel
         _netChart.Bind(LineChart.GridBrushProperty, "Pro.CardBorder");
 
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
-        // The page title says "Server status"; here only when it was last updated.
+        // The page already has a title, so the header only shows when it was last updated.
         _updated.VerticalAlignment = VerticalAlignment.Center;
         Grid.SetColumn(_updated, 1);
         header.Children.Add(_updated);
@@ -82,7 +79,7 @@ public sealed class ServerStatusView : StackPanel
         DetachedFromVisualTree += (_, _) => _timer.Stop();
     }
 
-    /// <summary>Starts sampling again, e.g. after a new login; the graphs keep their history.</summary>
+    /// <summary>Restarts sampling, for example after a new login. The graphs keep their history.</summary>
     public async Task StartAsync()
     {
         _previous = null;
@@ -90,8 +87,6 @@ public sealed class ServerStatusView : StackPanel
         await SampleAsync();
         await LoadVersionsAsync();
     }
-
-    // ---------------------------------------------------------------- sampling
 
     private async Task SampleAsync()
     {
@@ -187,38 +182,24 @@ public sealed class ServerStatusView : StackPanel
         _versions.Children.Clear();
         _versions.RowDefinitions.Clear();
         string[] headings = ["", "Commit", "Version", "Date", "Last change"];
-        AddRow(0, headings.Select(h => Text(h, 11.5, "Pro.Muted", FontWeight.SemiBold)).ToArray());
-        int row = 1;
+        AddGridRow(_versions, headings.Select(h => Text(h, 11.5, "Pro.Muted", FontWeight.SemiBold)).ToArray());
         foreach (RepositoryVersion v in versions)
         {
-            AddRow(row++,
+            AddGridRow(_versions,
                 Text(v.Name, 12.5, weight: FontWeight.SemiBold),
                 Mono($"{v.Commit ?? "?"}" + (v.Branch is { } branch ? $" ({branch})" : "")),
                 Text(v.Build ?? "", 12.5),
                 Text(v.Date ?? "", 12.5, "Pro.Muted"),
                 new TextBlock { Text = v.Subject ?? "", FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis }.Bind(TextBlock.ForegroundProperty, "Pro.Muted"));
         }
-        if (versions.Count == 0) AddRow(1, Text("No hotel repositories found on this server.", 12.5, "Pro.Muted"));
+        if (versions.Count == 0) AddGridRow(_versions, Text("No hotel repositories found on this server.", 12.5, "Pro.Muted"));
     }
-
-    private void AddRow(int row, params Control[] cells)
-    {
-        _versions.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
-        for (int i = 0; i < cells.Length; i++)
-        {
-            Grid.SetRow(cells[i], row);
-            Grid.SetColumn(cells[i], i);
-            _versions.Children.Add(cells[i]);
-        }
-    }
-
-    // ---------------------------------------------------------------- building blocks
 
     internal static TextBlock Big() => Text("…", 24, weight: FontWeight.SemiBold);
     internal static TextBlock Small() => Text("", 12, "Pro.Muted");
 
     internal static SelectableTextBlock Mono(string text) =>
-        new SelectableTextBlock { Text = text, FontFamily = new FontFamily("Cascadia Mono, Consolas, DejaVu Sans Mono, monospace"), FontSize = 12.5 }
+        new SelectableTextBlock { Text = text, FontFamily = ProfessionalTheme.Mono, FontSize = 12.5 }
             .Bind(SelectableTextBlock.ForegroundProperty, "Pro.Text");
 
     internal static Control Tile(string title, string icon, Color color, TextBlock value, TextBlock detail)
@@ -274,7 +255,7 @@ public sealed class ServerStatusView : StackPanel
         return legend;
     }
 
-    /// <summary>A bar, green / orange / red by how full it is, or in <paramref name="fixedColor"/> for shares.</summary>
+    /// <summary>A usage bar coloured green, orange or red by how full it is, unless a fixed colour is given.</summary>
     internal static Control Bar(double percent, Color? fixedColor = null)
     {
         Color color = fixedColor ?? (percent >= 90 ? Color.Parse("#DC2626") : percent >= 75 ? Color.Parse("#D97706") : Color.Parse("#16A34A"));
@@ -285,9 +266,6 @@ public sealed class ServerStatusView : StackPanel
         return outer;
     }
 
-    // ---------------------------------------------------------------- formatting
-
-    /// <summary>B/s, KB/s or MB/s, whichever reads best.</summary>
     public static string Rate(double bytesPerSecond) =>
         bytesPerSecond >= 1024 * 1024 ? $"{bytesPerSecond / (1024 * 1024):0.00} MB/s"
         : bytesPerSecond >= 1024 ? $"{bytesPerSecond / 1024:0.0} KB/s"

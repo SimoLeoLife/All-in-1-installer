@@ -276,6 +276,39 @@ public sealed class ServerConnection : IAsyncDisposable
         return sftp;
     }
 
+    /// <summary>
+    /// Like ssh -L: a free port on 127.0.0.1 of this computer that leads to <paramref name="host"/>:<paramref name="port"/>
+    /// as the server sees it. Dispose closes it.
+    /// </summary>
+    public PortForward ForwardLocalPort(string host, int port)
+    {
+        var forward = new ForwardedPortLocal("127.0.0.1", 0, host, (uint)port);
+        _client.AddForwardedPort(forward);
+        try
+        {
+            forward.Start();
+        }
+        catch
+        {
+            _client.RemoveForwardedPort(forward);
+            forward.Dispose();
+            throw;
+        }
+        return new PortForward(_client, forward);
+    }
+
+    public sealed class PortForward(SshClient client, ForwardedPortLocal forward) : IDisposable
+    {
+        public int LocalPort => (int)forward.BoundPort;
+
+        public void Dispose()
+        {
+            try { forward.Stop(); } catch { }
+            try { client.RemoveForwardedPort(forward); } catch { }
+            forward.Dispose();
+        }
+    }
+
     public async Task<CommandResult> RunAsync(string command, CancellationToken token = default, string? input = null)
     {
         // A Windows line ending would end up in the command ("set -e\r").

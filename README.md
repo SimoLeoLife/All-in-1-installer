@@ -869,6 +869,23 @@ password or a damaged file changes nothing.
 
 ![Restart all](docs/screenshots/tools-restart-all.png)
 
+## Updating the installer itself
+
+The published program checks at startup whether a newer release of
+<https://github.com/duckietm/All-in-1-installer> is out. When there is one, it says what is new and offers
+**Update and restart**: the release file is downloaded next to the running program, the running one is renamed
+to `<name>.old`, the new one takes its place under the same name, and the program starts again. **Later** keeps
+the version you have; the question comes back at the next start. The `.old` file is removed at that next start.
+
+The check is quiet when there is nothing to do: no internet, a release that is not newer, a draft or
+pre-release, or a repository without releases all mean no question is asked. It also leaves development builds
+alone: only the self-contained single-file program (`publish-win.bat` / `publish-linux.sh`) can replace itself
+with one file, so `dotnet run` never offers an update.
+
+The version it compares is `<Version>` in `SourceCode/All-in-1 Installer.csproj` against the release's tag
+(`v1.2.0` and `1.2.0` both work). The file it downloads is the release asset for your system: the `.exe` on
+Windows, the Linux one otherwise, preferring the one whose name matches your architecture.
+
 ## Building
 
 Requires the .NET 11 SDK (see [Requirements](#requirements)).
@@ -927,8 +944,10 @@ SourceCode/
   App/Professional/Views/FinishedView.cs  Completed pages: summary, WinSCP and where the assets go; AtomCMS' web installer
   App/Professional/Views/RunPanel.cs      Progress, check list, result and live log of an install step
   App/Professional/Views/ChoiceDialog.cs  Question with described answers
+  App/Professional/Views/UpdateDialog.cs  "A new version is available" at startup, with the download
   App/Professional/Views/ProgressControls.cs    Check list and result banner
   App/Professional/Views/LogView.cs       Console output panel
+  Update/AppUpdate.cs                     Checks GitHub releases at startup and replaces the program with a newer one
   Configuration/ClientConfiguration.cs    The configuration/ directory on the client
   Configuration/DatabaseCredentials.cs    Generated MariaDB passwords and their file format
   Configuration/SettingsBackup.cs         Encrypted export / import of the configuration directory

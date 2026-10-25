@@ -222,6 +222,95 @@ public static class MariaDbInstaller
             stdin: LocalRootPasswordSql(credentials) + "\nFLUSH PRIVILEGES;\n");
     }
 
+    /// <summary>
+    /// Gives root@localhost (socket login kept) and root@'%' when it exists <paramref name="credentials"/>' root password.
+    /// When root cannot log in through the socket any more, MariaDB is restarted for a moment with --skip-grant-tables
+    /// and --skip-networking to change it, then started normally again.
+    /// </summary>
+    public static Task ResetRootPasswordAsync(ServerConnection connection, DatabaseCredentials credentials, Action<string> log,
+        CancellationToken token = default)
+    {
+        string root = Sql.Literal(credentials.RootUser), password = Sql.Literal(credentials.RootPassword);
+        // FLUSH PRIVILEGES first: without grant tables, ALTER USER only works after it has loaded them.
+        string sql = $"""
+            FLUSH PRIVILEGES;
+            {LocalRootPasswordSql(credentials)}
+            ALTER USER IF EXISTS {root}@'%' IDENTIFIED BY {password};
+            FLUSH PRIVILEGES;
+
+            """;
+        string script = RemoteScript.Prelude + ReadSecret + """
+
+            command -v mariadb >/dev/null || fail "MariaDB is not installed on this server."
+            service_mariadb() { if [ -d /run/systemd/system ]; then systemctl "$1" mariadb; else service mariadb "$1"; fi; }
+            answers() { for i in $(seq 1 30); do mariadb -N -e 'SELECT 1' >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
+            if ! pgrep -x mariadbd >/dev/null && ! pgrep -x mysqld >/dev/null; then
+              echo "> MariaDB is not running: starting it"
+              service_mariadb start || true
+              answers || true
+            fi
+
+            if mariadb --protocol=socket -N -e 'SELECT 1' >/dev/null 2>&1; then
+              echo "> root logs in through the socket: setting the new password"
+              mariadb < "$secret" || fail "Changing the root password failed (see above)."
+            else
+              echo "> root cannot log in through the socket: restarting MariaDB without privilege checks for a moment"
+              echo "  (--skip-grant-tables --skip-networking: nobody can connect from outside meanwhile)"
+              safe=$(command -v mariadbd-safe || command -v mysqld_safe) || fail "mariadbd-safe is missing, so MariaDB cannot be started without privilege checks."
+              service_mariadb stop || true
+              # Without systemd the init script stops MariaDB by logging in as root, which is what does not work: stop it
+              # with SIGTERM instead (a normal shutdown), the mariadbd-safe wrapper first so it does not start it again.
+              stopped() { ! pgrep -x mariadbd >/dev/null && ! pgrep -x mysqld >/dev/null; }
+              for i in $(seq 1 10); do stopped && break; sleep 1; done
+              if ! stopped; then
+                echo "  stopping it with SIGTERM instead"
+                # By process name: -f would match this script's own command line.
+                pkill -TERM -x mariadbd-safe 2>/dev/null || pkill -TERM -x mysqld_safe 2>/dev/null || true
+                pkill -TERM -x mariadbd 2>/dev/null || pkill -TERM -x mysqld 2>/dev/null || true
+                for i in $(seq 1 60); do stopped && break; sleep 1; done
+              fi
+              stopped || fail "MariaDB does not stop, so it cannot be started without privilege checks."
+              install -d -o mysql -g mysql /run/mysqld
+              "$safe" --skip-grant-tables --skip-networking </dev/null >/dev/null 2>&1 &
+              answers || { service_mariadb start || true; fail "MariaDB did not start with --skip-grant-tables (journalctl -u mariadb)."; }
+              changed=yes
+              mariadb < "$secret" || changed=
+              echo "> Starting MariaDB normally again"
+              mariadb-admin shutdown 2>/dev/null || mysqladmin shutdown 2>/dev/null || true
+              for i in $(seq 1 60); do stopped && break; sleep 1; done
+              service_mariadb start
+              answers || fail "MariaDB does not answer after the restart (journalctl -u mariadb)."
+              [ -n "$changed" ] || fail "Changing the root password failed (see above). MariaDB runs normally again."
+            fi
+            out=$(mariadb --protocol=socket -N -e 'SELECT CURRENT_USER()' 2>&1) || fail "The socket login of root does not work: $out"
+            echo "  root (socket): logged in as $out"
+            """;
+        return RemoteScript.RunAsync(connection, script, log, "Resetting the root password failed", token, stdin: sql);
+    }
+
+    /// <summary>
+    /// The CMS and emulator accounts as AtomCMS' .env and the emulator's config.ini use them, for a new credentials file.
+    /// Values that are not found are null.
+    /// </summary>
+    public static async Task<(string? Database, string? CmsUser, string? CmsPassword, string? EmulatorUser, string? EmulatorPassword)> ReadAccountsAsync(
+        ServerConnection connection, CancellationToken token = default)
+    {
+        string script = $$"""
+            env={{AtomCmsInstaller.Directory}}/.env
+            ini={{EmulatorInstaller.Directory}}/config.ini
+            value() { grep -sE "^$1=" "$2" | head -1 | cut -d= -f2- | sed -E 's/^"(.*)"$/\1/' | tr -d '\r'; }
+            echo "DB=$(value db.database "$ini")"
+            echo "CMSUSER=$(value DB_USERNAME "$env")"
+            echo "CMSPASS=$(value DB_PASSWORD "$env")"
+            echo "EMUUSER=$(value db.username "$ini")"
+            echo "EMUPASS=$(value db.password "$ini")"
+            """;
+        // The passwords are only read into memory, never logged.
+        ScriptValues values = await RemoteScript.RunCapturingAsync(connection, script, _ => { }, "Reading the database accounts failed",
+            ["DB", "CMSUSER", "CMSPASS", "EMUUSER", "EMUPASS"], token);
+        return (values["DB"], values["CMSUSER"], values["CMSPASS"], values["EMUUSER"], values["EMUPASS"]);
+    }
+
     // The SQL goes over stdin so the passwords never appear on a command line.
     public static Task CreateUsersAsync(ServerConnection connection, DatabaseCredentials credentials, Action<string> log,
         CancellationToken token = default)
@@ -251,10 +340,11 @@ public static class MariaDbInstaller
 
     /// <summary>
     /// Returns null if <paramref name="user"/> can log in and use the database, else the reason. Connects to the
-    /// server's own network address so user@'%' is tested. <paramref name="local"/> also tests 127.0.0.1 and the socket.
+    /// server's own network address so user@'%' is tested (unless <paramref name="remote"/> is false).
+    /// <paramref name="local"/> also tests 127.0.0.1 and the socket.
     /// </summary>
     public static async Task<string?> TestLoginAsync(ServerConnection connection, string user, string password, string? database,
-        bool local, Action<string> log, CancellationToken token = default)
+        bool local, Action<string> log, CancellationToken token = default, bool remote = true)
     {
         string options = $"[client]\nuser={user}\npassword={password}\n";
         string check = database is null
@@ -263,6 +353,7 @@ public static class MariaDbInstaller
         string script = RemoteScript.Prelude + ReadSecret + $$"""
             ip=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -vE '^(127\.|::1|fe80)' | head -1)
             set --
+            {{(remote ? "" : "ip=")}}
             [ -n "$ip" ] && set -- "--protocol=tcp --host=$ip"
             {{(local ? "set -- \"$@\" \"--protocol=tcp --host=127.0.0.1\" \"--protocol=socket\"" : "")}}
             [ $# -gt 0 ] || { echo "  no network address to test a remote login from"; exit 0; }

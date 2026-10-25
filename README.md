@@ -933,6 +933,31 @@ publish-win.bat         # publish\win-x64\All-in-1 Installer.exe
 The installer runs on your own Windows or Linux desktop and connects to the server, so the
 server itself needs no GUI.
 
+### On GitHub
+
+`.github/workflows/build.yml` builds both single-file programs on every push to `main` and on every pull
+request, on `windows-latest` and `ubuntu-latest`, so a build that does not compile is caught before it is
+merged. Each one is kept as a workflow artifact:
+
+| File | Platform |
+|------|----------|
+| `All-in-1 Installer win-x64.exe` | Windows |
+| `All-in-1 Installer linux-x64` | Linux |
+
+Pushing a tag that starts with `v` does the same and then publishes a release with both files attached:
+
+```bash
+git tag v1.1.0
+git push origin v1.1.0
+```
+
+The tag is also the version the program reports: `-p:Version=` is set from it, so the release and the program
+inside agree. That matters, because the startup update check compares the newest release tag with the version
+of the running program — without it a released build would keep offering itself as an update. The file names
+are what that check looks for: the `.exe` on Windows, the one with `linux` in the name otherwise.
+
+**Run it by hand** from the Actions tab (`workflow_dispatch`) to get the two files without tagging anything.
+
 ## Project layout
 
 ```

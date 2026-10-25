@@ -537,19 +537,23 @@ public sealed class ToolsView
         RunPanel run = StartRun("git fetch every clone");
         IReadOnlyList<RepositoryUpdate> updates = await Task.Run(() => ServerStatus.UpdatesAsync(connection));
         foreach (RepositoryUpdate update in updates)
-            run.Log($"  {update.Name} ({update.Branch ?? "?"}): " +
+            run.Log($"  {update.Name}: on {update.Branch ?? "?"}, counted against {update.Counted ?? "?"} — " +
+                    (update.SwitchesBranch ? $"updating switches it to {update.Target}; " : "") +
                     (update.HasUpdate ? $"{update.Behind} new commit(s), newest {update.Newest}" : "up to date"));
         if (updates.Count == 0) run.Log("  No hotel clones found on this server.");
         ShowUpdates(updates);
 
         RepositoryUpdate[] behind = updates.Where(u => u.HasUpdate).ToArray();
-        run.Done(behind.Length > 0 ? $"{behind.Length} with new commits" : "up to date");
-        await FinishAsync(run, behind.Length > 0 ? ResultKind.Info : ResultKind.Success,
-            behind.Length > 0 ? "There are updates" : "Everything is up to date",
-            behind.Length > 0
-                ? $"New commits for {string.Join(", ", behind.Select(u => $"{u.Name} ({u.Behind})"))}. " +
+        RepositoryUpdate[] switching = updates.Where(u => u.SwitchesBranch).ToArray();
+        bool anything = behind.Length > 0 || switching.Length > 0;
+        run.Done(anything ? $"{updates.Count(u => u.HasUpdate || u.SwitchesBranch)} to update" : "up to date");
+        await FinishAsync(run, anything ? ResultKind.Info : ResultKind.Success,
+            anything ? "There are updates" : "Everything is up to date",
+            anything
+                ? (behind.Length > 0 ? $"New commits for {string.Join(", ", behind.Select(u => $"{u.Name} ({u.Behind})"))}. " : "") +
+                  (switching.Length > 0 ? $"Waiting to move to the chosen branch: {string.Join(", ", switching.Select(u => $"{u.Name} {u.Branch} → {u.Target}"))}. " : "") +
                   "Nothing was changed yet: update with the tools here."
-                : "Every clone has the newest commits of the branch it is on.");
+                : "Every clone is on its chosen branch and has its newest commits.");
     }
 
     /// <summary>The same check without a run panel, after logging in and after an update.</summary>
@@ -571,25 +575,36 @@ public sealed class ToolsView
     /// <summary>Puts what the check found on the update tools and on the line under them.</summary>
     private void ShowUpdates(IReadOnlyList<RepositoryUpdate> updates)
     {
-        bool Known(params string[] directories) => updates.Any(u => directories.Contains(u.Directory));
-        int Behind(params string[] directories) => updates.Where(u => directories.Contains(u.Directory)).Sum(u => u.Behind);
+        RepositoryUpdate[] For(params string[] directories) => updates.Where(u => directories.Contains(u.Directory)).ToArray();
 
-        Caption("Update emulator", Known(EmulatorInstaller.Repository), Behind(EmulatorInstaller.Repository),
-            "git pull, build.sh, start the new version");
-        Caption("Update Octane", Known(OctaneInstaller.Octane, OctaneInstaller.Renderer),
-            Behind(OctaneInstaller.Octane, OctaneInstaller.Renderer), "Renderer and Octane: git pull, fresh yarn install, build");
+        Caption("Update emulator", "git pull, build.sh, start the new version", For(EmulatorInstaller.Repository));
+        Caption("Update Octane", "Renderer and Octane: git pull, fresh yarn install, build",
+            For(OctaneInstaller.Octane, OctaneInstaller.Renderer));
 
         RepositoryUpdate[] behind = updates.Where(u => u.HasUpdate).ToArray();
+        RepositoryUpdate[] switching = updates.Where(u => u.SwitchesBranch).ToArray();
+        string[] parts =
+        [
+            .. behind.Length > 0 ? new[] { "New commits: " + string.Join(", ", behind.Select(u => $"{u.Name} {u.Behind} on {u.Counted}")) + "." } : [],
+            .. switching.Length > 0 ? new[] { "Moving to the chosen branch: " + string.Join(", ", switching.Select(u => $"{u.Name} {u.Branch} → {u.Target}")) + "." } : []
+        ];
         _updates.Text = updates.Count == 0 ? "No hotel clones found on this server."
-            : behind.Length == 0 ? $"Checked {updates.Count} clone(s): everything is up to date."
-            : "New commits: " + string.Join(", ", behind.Select(u => $"{u.Name} {u.Behind} on {u.Branch}")) + ".";
-        _updates.Bind(TextBlock.ForegroundProperty, behind.Length > 0 ? "Pro.WarningText" : "Pro.Subtle");
+            : parts.Length == 0 ? $"Checked {updates.Count} clone(s): everything is on its branch and up to date."
+            : string.Join("   ", parts);
+        _updates.Bind(TextBlock.ForegroundProperty, parts.Length > 0 ? "Pro.WarningText" : "Pro.Subtle");
     }
 
-    private void Caption(string tool, bool known, int behind, string description)
+    private void Caption(string tool, string description, RepositoryUpdate[] clones)
     {
         if (!_toolCaptions.TryGetValue(tool, out TextBlock? caption)) return;
-        caption.Text = !known ? description
+        if (clones.Length == 0)
+        {
+            caption.Text = description;
+            return;
+        }
+        int behind = clones.Sum(c => c.Behind);
+        string? target = clones.FirstOrDefault(c => c.SwitchesBranch)?.Target;
+        caption.Text = target is not null ? $"to {target}{(behind > 0 ? $", {behind} new" : "")} · {description}"
             : behind > 0 ? $"{behind} new commit(s) · {description}"
             : $"up to date · {description}";
     }
@@ -608,12 +623,16 @@ public sealed class ToolsView
 
     private async Task UpdateEmulatorAsync(Window owner, ServerConnection connection)
     {
+        // The branch from the Settings page, so this tool follows the same choice as the clone step.
+        string? branch = ServerStatus.ChosenBranch(EmulatorInstaller.Repository);
         if (!await ConfirmAsync(owner, "Update the emulator?",
-                "git pull in /var/www/emulator. When there is something new, the emulator is built again and restarted with the new version: everyone in the hotel is disconnected for a moment.",
+                $"git pull in {EmulatorInstaller.Repository}" +
+                (branch is null ? "" : $" on branch {branch} (Settings → Repository branches; a clone on another branch is switched over first)") +
+                ". When there is something new, the emulator is built again and restarted with the new version: everyone in the hotel is disconnected for a moment.",
                 "Update the emulator")) return;
         RunPanel run = StartRun("git pull", "build.sh", "Start the new version");
         (string? oldCommit, string? oldVersion) = await Task.Run(() => ServerTools.EmulatorVersionAsync(connection));
-        string commit = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, EmulatorInstaller.Repository, null, run.Log));
+        string commit = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, EmulatorInstaller.Repository, branch, run.Log));
         // New images or badge parts in the emulator's Assets/ go to gamedata (missing files only).
         await Task.Run(() => EmulatorAssetsInstaller.InstallAsync(connection, run.Log));
         (string? newCommit, _) = await Task.Run(() => ServerTools.EmulatorVersionAsync(connection));
@@ -652,8 +671,11 @@ public sealed class ToolsView
         WebAccessSettings site = state.Site ?? throw new ServerConnectionException("The hotel's address is not known: run the Web access step first.");
         if (!state.OctanePresent || !state.RendererPresent) throw new ServerConnectionException("Octane or Octane-Renderer is not cloned on this server.");
 
-        string renderer = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Renderer, null, run.Log));
-        string octane = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Octane, null, run.Log));
+        // Both follow the branch chosen on the Settings page, like the clone steps do.
+        string renderer = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Renderer,
+            ServerStatus.ChosenBranch(OctaneInstaller.Renderer), run.Log));
+        string octane = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Octane,
+            ServerStatus.ChosenBranch(OctaneInstaller.Octane), run.Log));
         run.Done(octane);
 
         await Task.Run(() => OctaneInstaller.YarnInstallAsync(connection, OctaneInstaller.Renderer, run.Log, fresh: true));

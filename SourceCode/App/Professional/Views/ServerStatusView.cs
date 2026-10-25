@@ -231,9 +231,14 @@ public sealed class ServerStatusView : StackPanel
             foreach (RepositoryUpdate update in updates)
             {
                 if (!_updateCells.TryGetValue(update.Directory, out TextBlock? cell)) continue;
-                cell.Text = update.HasUpdate ? $"{update.Behind} new" : "up to date";
-                cell.Bind(TextBlock.ForegroundProperty, update.HasUpdate ? "Pro.WarningText" : "Pro.SuccessText");
-                if (update.Newest is { } newest) ToolTip.SetTip(cell, $"Newest on {update.Branch}: {newest}");
+                bool waiting = update.HasUpdate || update.SwitchesBranch;
+                cell.Text = update.SwitchesBranch
+                    ? $"→ {update.Target}" + (update.HasUpdate ? $", {update.Behind} new" : "")
+                    : update.HasUpdate ? $"{update.Behind} new" : "up to date";
+                cell.Bind(TextBlock.ForegroundProperty, waiting ? "Pro.WarningText" : "Pro.SuccessText");
+                if (update.Newest is { } newest)
+                    ToolTip.SetTip(cell, (update.SwitchesBranch ? $"The chosen branch is {update.Target}; this clone is on {update.Branch}.\n" : "") +
+                                         $"Newest on {update.Counted}: {newest}");
             }
             // A clone the check did not reach, for example one without a remote branch.
             foreach (TextBlock cell in _updateCells.Values.Where(c => c.Text == "checking …")) cell.Text = "?";

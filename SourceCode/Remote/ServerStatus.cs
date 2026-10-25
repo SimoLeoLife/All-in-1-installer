@@ -48,6 +48,12 @@ public sealed record StatusSample(
 /// <summary>The git state of one hotel repository.</summary>
 public sealed record RepositoryVersion(string Name, string Directory, string? Branch, string? Commit, string? Date, string? Subject, string? Build);
 
+/// <summary>What a "git pull" would bring in for one clone: the commits it is behind, and the newest one.</summary>
+public sealed record RepositoryUpdate(string Name, string Directory, string? Branch, int Behind, string? Newest)
+{
+    public bool HasUpdate => Behind > 0;
+}
+
 /// <summary>Live figures for the Server status dashboard, read from /proc in one short command per sample.</summary>
 public static class ServerStatus
 {
@@ -114,17 +120,19 @@ public static class ServerStatus
             disks, users, players, emulator);
     }
 
+    /// <summary>The hotel's clones, in the order the dashboard and the Tools page show them.</summary>
+    private static readonly (string Name, string Directory)[] Repositories =
+    [
+        ("Emulator (Polaris)", EmulatorInstaller.Repository),
+        ("Octane", OctaneInstaller.Octane),
+        ("Octane-Renderer", OctaneInstaller.Renderer),
+        ("AtomCMS", AtomCmsInstaller.Directory)
+    ];
+
     /// <summary>Branch, commit and date of the emulator, Octane and Octane-Renderer clones, plus the emulator's JAR version.</summary>
     public static async Task<IReadOnlyList<RepositoryVersion>> VersionsAsync(ServerConnection connection, CancellationToken token = default)
     {
-        (string Name, string Directory)[] repositories =
-        [
-            ("Emulator (Polaris)", EmulatorInstaller.Repository),
-            ("Octane", OctaneInstaller.Octane),
-            ("Octane-Renderer", OctaneInstaller.Renderer),
-            ("AtomCMS", AtomCmsInstaller.Directory)
-        ];
-        string script = string.Join('\n', repositories.Select((r, i) => $$"""
+        string script = string.Join('\n', Repositories.Select((r, i) => $$"""
             d={{r.Directory}}
             if [ -d "$d/.git" ]; then
               echo "repo{{i}} $(git -c safe.directory="$d" -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)|$(git -c safe.directory="$d" -C "$d" log -1 --format='%h|%cd|%s' --date=format:'%Y-%m-%d %H:%M' 2>/dev/null)"
@@ -138,20 +146,59 @@ public static class ServerStatus
             true
             """;
         CommandResult result = await connection.RunAsRootAsync(script, token);
-        var lines = result.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Select(l => (Key: l.Split(' ', 2)[0], Value: l.Contains(' ') ? l.Split(' ', 2)[1] : ""))
-            .ToList();
-        string? Value(string key) => lines.FirstOrDefault(l => l.Key == key).Value is { Length: > 0 } v ? v : null;
+        Dictionary<string, string> lines = KeyValues(result.Output);
+        string? Value(string key) => lines.TryGetValue(key, out string? value) ? value : null;
         string?[] builds = [Value("jar"), Value("octane") is { } o ? "v" + o : null, Value("renderer") is { } r ? "v" + r : null, null];
 
         var versions = new List<RepositoryVersion>();
-        for (int i = 0; i < repositories.Length; i++)
+        for (int i = 0; i < Repositories.Length; i++)
         {
             if (Value($"repo{i}") is not { } info) continue;
             string[] parts = info.Split('|', 4);
-            versions.Add(new RepositoryVersion(repositories[i].Name, repositories[i].Directory, Part(parts, 0), Part(parts, 1), Part(parts, 2), Part(parts, 3), builds[i]));
+            versions.Add(new RepositoryVersion(Repositories[i].Name, Repositories[i].Directory, Part(parts, 0), Part(parts, 1), Part(parts, 2), Part(parts, 3), builds[i]));
         }
         return versions;
+    }
+
+    /// <summary>
+    /// Fetches every clone and reports what a "git pull" would bring in. The fetch only fills the remote
+    /// branches: no file on the server is changed, and the hotel keeps running.
+    /// </summary>
+    public static async Task<IReadOnlyList<RepositoryUpdate>> UpdatesAsync(ServerConnection connection, CancellationToken token = default)
+    {
+        string script = string.Join('\n', Repositories.Select((r, i) => $$"""
+            d={{r.Directory}}
+            if [ -d "$d/.git" ]; then
+              timeout 30 git -c safe.directory="$d" -C "$d" fetch --quiet --prune origin 2>/dev/null
+              echo "repo{{i}} $(git -c safe.directory="$d" -C "$d" rev-parse --abbrev-ref HEAD 2>/dev/null)|$(git -c safe.directory="$d" -C "$d" rev-list --count HEAD..@{u} 2>/dev/null || echo 0)|$(git -c safe.directory="$d" -C "$d" log -1 --format='%h|%cd|%s' --date=format:'%Y-%m-%d %H:%M' @{u} 2>/dev/null)"
+            fi
+            """)) + "\ntrue\n";
+        CommandResult result = await connection.RunAsRootAsync(script, token);
+        Dictionary<string, string> lines = KeyValues(result.Output);
+
+        var updates = new List<RepositoryUpdate>();
+        for (int i = 0; i < Repositories.Length; i++)
+        {
+            if (!lines.TryGetValue($"repo{i}", out string? info)) continue;
+            // branch|behind|hash|date|subject, where the last three are missing when the branch tracks nothing.
+            string[] parts = info.Split('|', 5);
+            string newest = string.Join("  ", new[] { Part(parts, 2), Part(parts, 3), Part(parts, 4) }.Where(p => p is not null));
+            updates.Add(new RepositoryUpdate(Repositories[i].Name, Repositories[i].Directory, Part(parts, 0),
+                int.TryParse(Part(parts, 1), out int behind) ? behind : 0, newest.Length > 0 ? newest : null));
+        }
+        return updates;
+    }
+
+    // "key value" lines; a key without a value is left out.
+    private static Dictionary<string, string> KeyValues(string output)
+    {
+        var values = new Dictionary<string, string>();
+        foreach (string line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string[] pair = line.Split(' ', 2);
+            if (pair.Length == 2 && pair[1].Length > 0) values[pair[0]] = pair[1];
+        }
+        return values;
     }
 
     private static string? Part(string[] parts, int i) => parts.Length > i && parts[i].Length > 0 ? parts[i] : null;

@@ -131,8 +131,8 @@ public sealed class AtomCmsStep : InstallStep
             await Task.Run(() => GitCloneInstaller.MoveAsideAsync(connection, AtomCmsInstaller.Directory, Run.Log));
         }
         string commit = clone.Kind == CloneTargetKind.SameRepository
-            ? await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, AtomCmsInstaller.Directory, Run.Log))
-            : await Task.Run(() => GitCloneInstaller.CloneAsync(connection, AtomCmsInstaller.Repository, AtomCmsInstaller.Directory, Run.Log));
+            ? await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, AtomCmsInstaller.Directory, null, Run.Log))
+            : await Task.Run(() => GitCloneInstaller.CloneAsync(connection, AtomCmsInstaller.Repository, AtomCmsInstaller.Directory, null, Run.Log));
         Run.Done(commit);
 
         DatabaseCredentials? credentials = ClientConfiguration.LoadDatabaseCredentials(connection.Login.Host);

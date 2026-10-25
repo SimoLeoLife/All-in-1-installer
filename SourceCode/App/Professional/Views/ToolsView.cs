@@ -28,6 +28,11 @@ public sealed class ToolsView
 
     private readonly TextBlock _hint = Text("Log in to a server above to use these tools.", 12.5, "Pro.WarningText");
     private readonly TextBlock _connectedText = Text("", 13);
+    // What the update check found, under the Updates tools; the captions of those tools say it per component.
+    private readonly TextBlock _updates = Text("", 12, "Pro.Subtle");
+    private readonly Dictionary<string, TextBlock> _toolCaptions = [];
+    // The connection the update check already ran for, so it runs once per login and not on every Refresh.
+    private ServerConnection? _updatesCheckedFor;
 
     public Control Workspace { get; }
     /// <summary>The login wizard's last page.</summary>
@@ -70,10 +75,13 @@ public sealed class ToolsView
             Tool("Create full database backup", "Dump on the server, download to this computer", Icons.Download, BackupDatabaseAsync),
             Tool("Import full database", "Replace the hotel database with a backup", Icons.Folder, ImportDatabaseAsync),
             Tool("Recover SQL password", "New MariaDB root password, saved in configuration", Icons.Key, RecoverSqlPasswordAsync)));
-        page.Children.Add(Section("Updates",
+        StackPanel updates = Section("Updates",
+            Tool("Check for updates", "git fetch: what is new for the emulator, Octane and AtomCMS", Icons.Download, CheckUpdatesAsync),
             Tool("Update system", "apt update, upgrade and dist-upgrade", Icons.Cog, UpdateSystemAsync),
             Tool("Update emulator", "git pull, build.sh, start the new version", Icons.Server, UpdateEmulatorAsync),
-            Tool("Update Octane", "Renderer and Octane: git pull, fresh yarn install, build", Icons.Cube, UpdateOctaneAsync)));
+            Tool("Update Octane", "Renderer and Octane: git pull, fresh yarn install, build", Icons.Cube, UpdateOctaneAsync));
+        updates.Children.Add(_updates);
+        page.Children.Add(updates);
         page.Children.Add(_runHost);
         return Card(page, new Thickness(24, 20));
     }
@@ -89,8 +97,12 @@ public sealed class ToolsView
             button.Opacity = connection is null ? 0.45 : 1;
         }
         foreach (Button button in _settingsButtons) button.IsEnabled = !_running;
-        if (connection is not null)
-            _connectedText.Text = $"Root on {connection.Login.Host}:{connection.Login.Port} ({connection.Os?.PrettyName}). Pick a tool below.";
+        if (connection is null) return;
+        _connectedText.Text = $"Root on {connection.Login.Host}:{connection.Login.Port} ({connection.Os?.PrettyName}). Pick a tool below.";
+        // Once per login, and not while a tool is busy: the Updates tools then say what is new before you press anything.
+        if (_running || ReferenceEquals(_updatesCheckedFor, connection)) return;
+        _updatesCheckedFor = connection;
+        _ = CheckUpdatesQuietlyAsync(connection);
     }
 
     private Control BuildSettings()
@@ -108,7 +120,7 @@ public sealed class ToolsView
         return Card(panel, new Thickness(24, 20));
     }
 
-    private static Control Section(string heading, params Control[] tools)
+    private static StackPanel Section(string heading, params Control[] tools)
     {
         var panel = new StackPanel { Spacing = 8 };
         panel.Children.Add(Text(heading.ToUpperInvariant(), 11, "Pro.Muted", FontWeight.SemiBold));
@@ -127,7 +139,9 @@ public sealed class ToolsView
         content.Children.Add(glyph);
         var text = new StackPanel { Spacing = 1 };
         text.Children.Add(Text(title, 13, weight: FontWeight.SemiBold));
-        text.Children.Add(Text(description, 11.5, "Pro.Subtle"));
+        TextBlock caption = Text(description, 11.5, "Pro.Subtle");
+        _toolCaptions[title] = caption;
+        text.Children.Add(caption);
         Grid.SetColumn(text, 1);
         content.Children.Add(text);
         var button = new Button
@@ -514,6 +528,72 @@ public sealed class ToolsView
             "for HeidiSQL, connect through an SSH tunnel to 127.0.0.1:3306 with that password.");
     }
 
+    /// <summary>
+    /// "Check for updates": fetches every clone and reports what a git pull would bring in. Nothing on the
+    /// server is changed, so this is safe while the hotel is open.
+    /// </summary>
+    private async Task CheckUpdatesAsync(Window owner, ServerConnection connection)
+    {
+        RunPanel run = StartRun("git fetch every clone");
+        IReadOnlyList<RepositoryUpdate> updates = await Task.Run(() => ServerStatus.UpdatesAsync(connection));
+        foreach (RepositoryUpdate update in updates)
+            run.Log($"  {update.Name} ({update.Branch ?? "?"}): " +
+                    (update.HasUpdate ? $"{update.Behind} new commit(s), newest {update.Newest}" : "up to date"));
+        if (updates.Count == 0) run.Log("  No hotel clones found on this server.");
+        ShowUpdates(updates);
+
+        RepositoryUpdate[] behind = updates.Where(u => u.HasUpdate).ToArray();
+        run.Done(behind.Length > 0 ? $"{behind.Length} with new commits" : "up to date");
+        await FinishAsync(run, behind.Length > 0 ? ResultKind.Info : ResultKind.Success,
+            behind.Length > 0 ? "There are updates" : "Everything is up to date",
+            behind.Length > 0
+                ? $"New commits for {string.Join(", ", behind.Select(u => $"{u.Name} ({u.Behind})"))}. " +
+                  "Nothing was changed yet: update with the tools here."
+                : "Every clone has the newest commits of the branch it is on.");
+    }
+
+    /// <summary>The same check without a run panel, after logging in and after an update.</summary>
+    private async Task CheckUpdatesQuietlyAsync(ServerConnection connection)
+    {
+        _updates.Text = "Checking for updates ...";
+        _updates.Bind(TextBlock.ForegroundProperty, "Pro.Subtle");
+        try
+        {
+            ShowUpdates(await Task.Run(() => ServerStatus.UpdatesAsync(connection)));
+        }
+        catch (Exception ex)
+        {
+            _updates.Text = $"Could not check for updates: {ex.Message}";
+            _updates.Bind(TextBlock.ForegroundProperty, "Pro.Subtle");
+        }
+    }
+
+    /// <summary>Puts what the check found on the update tools and on the line under them.</summary>
+    private void ShowUpdates(IReadOnlyList<RepositoryUpdate> updates)
+    {
+        bool Known(params string[] directories) => updates.Any(u => directories.Contains(u.Directory));
+        int Behind(params string[] directories) => updates.Where(u => directories.Contains(u.Directory)).Sum(u => u.Behind);
+
+        Caption("Update emulator", Known(EmulatorInstaller.Repository), Behind(EmulatorInstaller.Repository),
+            "git pull, build.sh, start the new version");
+        Caption("Update Octane", Known(OctaneInstaller.Octane, OctaneInstaller.Renderer),
+            Behind(OctaneInstaller.Octane, OctaneInstaller.Renderer), "Renderer and Octane: git pull, fresh yarn install, build");
+
+        RepositoryUpdate[] behind = updates.Where(u => u.HasUpdate).ToArray();
+        _updates.Text = updates.Count == 0 ? "No hotel clones found on this server."
+            : behind.Length == 0 ? $"Checked {updates.Count} clone(s): everything is up to date."
+            : "New commits: " + string.Join(", ", behind.Select(u => $"{u.Name} {u.Behind} on {u.Branch}")) + ".";
+        _updates.Bind(TextBlock.ForegroundProperty, behind.Length > 0 ? "Pro.WarningText" : "Pro.Subtle");
+    }
+
+    private void Caption(string tool, bool known, int behind, string description)
+    {
+        if (!_toolCaptions.TryGetValue(tool, out TextBlock? caption)) return;
+        caption.Text = !known ? description
+            : behind > 0 ? $"{behind} new commit(s) · {description}"
+            : $"up to date · {description}";
+    }
+
     private async Task UpdateSystemAsync(Window owner, ServerConnection connection)
     {
         RunPanel run = StartRun("apt-get update, upgrade and dist-upgrade");
@@ -533,7 +613,7 @@ public sealed class ToolsView
                 "Update the emulator")) return;
         RunPanel run = StartRun("git pull", "build.sh", "Start the new version");
         (string? oldCommit, string? oldVersion) = await Task.Run(() => ServerTools.EmulatorVersionAsync(connection));
-        string commit = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, EmulatorInstaller.Repository, run.Log));
+        string commit = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, EmulatorInstaller.Repository, null, run.Log));
         // New images or badge parts in the emulator's Assets/ go to gamedata (missing files only).
         await Task.Run(() => EmulatorAssetsInstaller.InstallAsync(connection, run.Log));
         (string? newCommit, _) = await Task.Run(() => ServerTools.EmulatorVersionAsync(connection));
@@ -545,6 +625,7 @@ public sealed class ToolsView
             run.Done("not needed");
             run.Done("not needed");
             await FinishAsync(run, ResultKind.Success, "The emulator is up to date", $"{oldVersion} ({oldCommit}) is the newest version; nothing was rebuilt or restarted.");
+            await CheckUpdatesQuietlyAsync(connection);
             return;
         }
 
@@ -560,6 +641,7 @@ public sealed class ToolsView
         await FinishAsync(run, ResultKind.Success, "The emulator is updated",
             oldVersion == newVersion ? $"{newVersion} was rebuilt with the new commits ({oldCommit} → {newCommit}) and is running."
                 : $"{oldVersion ?? "?"} → {newVersion} ({oldCommit} → {newCommit}) is running.");
+        await CheckUpdatesQuietlyAsync(connection);
     }
 
     private async Task UpdateOctaneAsync(Window owner, ServerConnection connection)
@@ -570,8 +652,8 @@ public sealed class ToolsView
         WebAccessSettings site = state.Site ?? throw new ServerConnectionException("The hotel's address is not known: run the Web access step first.");
         if (!state.OctanePresent || !state.RendererPresent) throw new ServerConnectionException("Octane or Octane-Renderer is not cloned on this server.");
 
-        string renderer = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Renderer, run.Log));
-        string octane = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Octane, run.Log));
+        string renderer = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Renderer, null, run.Log));
+        string octane = await Task.Run(() => GitCloneInstaller.UpdateAsync(connection, OctaneInstaller.Octane, null, run.Log));
         run.Done(octane);
 
         await Task.Run(() => OctaneInstaller.YarnInstallAsync(connection, OctaneInstaller.Renderer, run.Log, fresh: true));
@@ -588,6 +670,7 @@ public sealed class ToolsView
         run.Done(site.ClientUrl);
         await FinishAsync(run, ResultKind.Success, $"Octane is updated on {site.ClientUrl}",
             $"Octane-Renderer {renderer}, Octane {octane}. Players get the new client when they reload the page.");
+        await CheckUpdatesQuietlyAsync(connection);
     }
 
     private async Task ExportSettingsAsync(Window owner)

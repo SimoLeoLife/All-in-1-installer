@@ -33,7 +33,10 @@ public sealed class ServerStatusView : StackPanel
     private readonly TextBlock _netScale = Text("", 11.5, "Pro.Subtle");
     private readonly StackPanel _disks = new() { Spacing = 10 };
     private readonly StackPanel _users = new() { Spacing = 6 };
-    private readonly Grid _versions = new() { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,Auto,*"), ColumnSpacing = 18, RowSpacing = 6 };
+    private readonly Grid _versions = new() { ColumnDefinitions = new ColumnDefinitions("Auto,Auto,Auto,Auto,Auto,*"), ColumnSpacing = 18, RowSpacing = 6 };
+    // The "Updates" cell of every repository row, by folder: the update check fills them in afterwards.
+    private readonly Dictionary<string, TextBlock> _updateCells = [];
+    private bool _checkingUpdates;
 
     public ServerStatusView(Func<ServerConnection?> connection)
     {
@@ -70,9 +73,18 @@ public sealed class ServerStatusView : StackPanel
         lists.Children.Add(users);
         Children.Add(lists);
 
-        var refresh = new Button { Content = "Refresh", Padding = new Thickness(14, 6), Classes = { "secondary" }, HorizontalAlignment = HorizontalAlignment.Right };
-        refresh.Click += async (_, _) => await LoadVersionsAsync();
-        Children.Add(Panel("Versions", refresh, _versions));
+        var refresh = new Button { Content = "Refresh", Padding = new Thickness(14, 6), Classes = { "secondary" } };
+        refresh.Click += async (_, _) =>
+        {
+            await LoadVersionsAsync();
+            await LoadUpdatesAsync();
+        };
+        var check = new Button { Content = "Check for updates", Padding = new Thickness(14, 6), Classes = { "secondary" } };
+        check.Click += async (_, _) => await LoadUpdatesAsync();
+        var versionButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        versionButtons.Children.Add(check);
+        versionButtons.Children.Add(refresh);
+        Children.Add(Panel("Versions", versionButtons, _versions));
 
         _timer.Tick += async (_, _) => await SampleAsync();
         AttachedToVisualTree += async (_, _) => await StartAsync();
@@ -86,6 +98,7 @@ public sealed class ServerStatusView : StackPanel
         _timer.Start();
         await SampleAsync();
         await LoadVersionsAsync();
+        await LoadUpdatesAsync();
     }
 
     private async Task SampleAsync()
@@ -181,18 +194,63 @@ public sealed class ServerStatusView : StackPanel
         }
         _versions.Children.Clear();
         _versions.RowDefinitions.Clear();
-        string[] headings = ["", "Commit", "Version", "Date", "Last change"];
+        _updateCells.Clear();
+        string[] headings = ["", "Commit", "Version", "Updates", "Date", "Last change"];
         AddGridRow(_versions, headings.Select(h => Text(h, 11.5, "Pro.Muted", FontWeight.SemiBold)).ToArray());
         foreach (RepositoryVersion v in versions)
         {
+            TextBlock updates = Text("…", 12.5, "Pro.Subtle");
+            _updateCells[v.Directory] = updates;
             AddGridRow(_versions,
                 Text(v.Name, 12.5, weight: FontWeight.SemiBold),
                 Mono($"{v.Commit ?? "?"}" + (v.Branch is { } branch ? $" ({branch})" : "")),
                 Text(v.Build ?? "", 12.5),
+                updates,
                 Text(v.Date ?? "", 12.5, "Pro.Muted"),
                 new TextBlock { Text = v.Subject ?? "", FontSize = 12.5, TextTrimming = TextTrimming.CharacterEllipsis }.Bind(TextBlock.ForegroundProperty, "Pro.Muted"));
         }
         if (versions.Count == 0) AddGridRow(_versions, Text("No hotel repositories found on this server.", 12.5, "Pro.Muted"));
+    }
+
+    /// <summary>
+    /// Fetches the clones and shows per repository how many commits a "git pull" would bring in. Only the
+    /// remote branches are refreshed, so the hotel is not touched.
+    /// </summary>
+    private async Task LoadUpdatesAsync()
+    {
+        if (_checkingUpdates || _updateCells.Count == 0 || _connection() is not { } connection) return;
+        _checkingUpdates = true;
+        foreach (TextBlock cell in _updateCells.Values)
+        {
+            cell.Text = "checking …";
+            cell.Bind(TextBlock.ForegroundProperty, "Pro.Subtle");
+        }
+        try
+        {
+            IReadOnlyList<RepositoryUpdate> updates = await Task.Run(() => ServerStatus.UpdatesAsync(connection));
+            foreach (RepositoryUpdate update in updates)
+            {
+                if (!_updateCells.TryGetValue(update.Directory, out TextBlock? cell)) continue;
+                cell.Text = update.HasUpdate ? $"{update.Behind} new" : "up to date";
+                cell.Bind(TextBlock.ForegroundProperty, update.HasUpdate ? "Pro.WarningText" : "Pro.SuccessText");
+                if (update.Newest is { } newest) ToolTip.SetTip(cell, $"Newest on {update.Branch}: {newest}");
+            }
+            // A clone the check did not reach, for example one without a remote branch.
+            foreach (TextBlock cell in _updateCells.Values.Where(c => c.Text == "checking …")) cell.Text = "?";
+        }
+        catch (Exception ex)
+        {
+            foreach (TextBlock cell in _updateCells.Values)
+            {
+                cell.Text = "?";
+                cell.Bind(TextBlock.ForegroundProperty, "Pro.ErrorText");
+                ToolTip.SetTip(cell, $"Could not check for updates: {ex.Message}");
+            }
+        }
+        finally
+        {
+            _checkingUpdates = false;
+        }
     }
 
     internal static TextBlock Big() => Text("…", 24, weight: FontWeight.SemiBold);

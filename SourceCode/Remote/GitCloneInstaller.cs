@@ -78,9 +78,20 @@ public static class GitCloneInstaller
         return result["BACKUP"] ?? "";
     }
 
-    /// <summary>Installs git if needed, clones, and returns the branch and commit.</summary>
-    public static Task<string> CloneAsync(ServerConnection connection, string url, string target, Action<string> log,
-        CancellationToken token = default)
+    /// <summary>
+    /// Sets $branch to the branch the remote really has, matched without case: one repository writes it as
+    /// "dev" and another as "Dev". Empty when no branch was chosen, so the repository's own default is used.
+    /// </summary>
+    private static string ResolveBranch(string? branch, string listRefs) => branch is null ? "branch=\n" : $$"""
+        want={{ServerConnection.ShellQuote(branch)}}
+        branch=$({{listRefs}} | grep -ix "$want" | head -1 || true)
+        [ -n "$branch" ] || fail "Branch $want is not in this repository."
+
+        """;
+
+    /// <summary>Installs git if needed, clones the branch (null: the repository's default), and returns the branch and commit.</summary>
+    public static Task<string> CloneAsync(ServerConnection connection, string url, string target, string? branch,
+        Action<string> log, CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
             set -o pipefail
@@ -90,16 +101,21 @@ public static class GitCloneInstaller
               apt-get install -y git
             fi
             d={{ServerConnection.ShellQuote(target)}}
+            u={{ServerConnection.ShellQuote(url)}}
             install -d -m 755 "$(dirname "$d")"
-            echo "> git clone {{url}} $d"
-            git clone --progress {{ServerConnection.ShellQuote(url)}} "$d" 2>&1 | {{QuietProgress}}
+            {{ResolveBranch(branch, "git ls-remote --heads \"$u\" | sed 's#.*refs/heads/##'")}}
+            echo "> git clone${branch:+ --branch $branch} {{url}} $d"
+            git clone ${branch:+--branch "$branch"} --progress "$u" "$d" 2>&1 | {{QuietProgress}}
             echo "COMMIT=$(git -c safe.directory="$d" -C "$d" rev-parse --abbrev-ref HEAD) $(git -c safe.directory="$d" -C "$d" log -1 --format='%h %cd %s' --date=short)"
             """;
         return CommitAfterAsync(connection, script, log, "Cloning failed", token);
     }
 
-    /// <summary>Fast-forwards the clone, refusing if tracked files were changed. Returns the branch and commit.</summary>
-    public static Task<string> UpdateAsync(ServerConnection connection, string target, Action<string> log,
+    /// <summary>
+    /// Fast-forwards the clone, refusing if tracked files were changed. Switches to <paramref name="branch"/>
+    /// first when the clone is on another one (null: stay on the branch it is on). Returns the branch and commit.
+    /// </summary>
+    public static Task<string> UpdateAsync(ServerConnection connection, string target, string? branch, Action<string> log,
         CancellationToken token = default)
     {
         string script = RemoteScript.Prelude + $$"""
@@ -122,6 +138,18 @@ public static class GitCloneInstaller
             if [ -n "$changed" ]; then
               echo "$changed" | head -20
               fail "Files tracked by git were changed in $d. Commit or undo those changes first, so they are not lost."
+            fi
+            echo "> git fetch origin"
+            git -c safe.directory="$d" -C "$d" fetch --quiet --prune origin
+            {{ResolveBranch(branch, "git -c safe.directory=\"$d\" -C \"$d\" for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin")}}
+            current=$(git -c safe.directory="$d" -C "$d" rev-parse --abbrev-ref HEAD)
+            if [ -n "$branch" ] && [ "$(echo "$current" | tr 'A-Z' 'a-z')" != "$(echo "$branch" | tr 'A-Z' 'a-z')" ]; then
+              echo "> git checkout $branch  (was $current)"
+              if git -c safe.directory="$d" -C "$d" show-ref --verify --quiet "refs/heads/$branch"; then
+                git -c safe.directory="$d" -C "$d" checkout "$branch"
+              else
+                git -c safe.directory="$d" -C "$d" checkout --track "origin/$branch"
+              fi
             fi
             echo "> git pull --ff-only"
             git -c safe.directory="$d" -C "$d" pull --ff-only --progress 2>&1 | {{QuietProgress}}

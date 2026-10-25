@@ -17,6 +17,10 @@ public sealed class InstallerSettings
     public string? DefaultKey { get; set; }
     /// <summary>The All-in-1 downloader's executable. Deploy Assets reads Habbo_Default from its folder.</summary>
     public string? DownloaderPath { get; set; }
+    /// <summary>The branch chosen per repository ("duckietm/Octane" to "dev"); a repository that is not in here uses main.</summary>
+    public Dictionary<string, string> Branches { get; set; } = [];
+
+    public const string DefaultBranch = "main";
 
     private static string File => Path.Combine(ClientConfiguration.Directory, "settings.json");
 
@@ -40,4 +44,15 @@ public sealed class InstallerSettings
         DefaultKey is { Length: > 0 } key && Path.Combine(ClientConfiguration.Directory, key) is var path && System.IO.File.Exists(path) ? path : null;
 
     public static string RelativeKey(string fullPath) => Path.GetRelativePath(ClientConfiguration.Directory, fullPath).Replace('\\', '/');
+
+    /// <summary>The branch chosen for a repository written as "owner/name", or main.</summary>
+    public string BranchFor(string repository) =>
+        Branches.TryGetValue(repository, out string? branch) && branch is { Length: > 0 } ? branch : DefaultBranch;
+
+    /// <summary>Remembers the branch; main is the default, so it is not written.</summary>
+    public void SetBranch(string repository, string branch)
+    {
+        if (branch == DefaultBranch) Branches.Remove(repository);
+        else Branches[repository] = branch;
+    }
 }
